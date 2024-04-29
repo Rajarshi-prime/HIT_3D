@@ -204,12 +204,20 @@ def forcing(uk,fk):
     ek_arr[:] = np.where(np.abs(ek_arr)< 1e-10,np.inf, ek_arr)
     
     """Change forcing starts here"""
-    
-    factor[:] = 1/dt*np.where(np.abs(ek_arr0) < 1e-10, 0, (ek_arr0/ek_arr)**0.5 - 1) #! The factors for each shell is calculated
+    factor[:] = 0.
+    factor[shell_no] = 10*N**3
     factor3d[:] = factor[kint]
-    fk[0] = factor3d*uk[0]*dealias
-    fk[1] = factor3d*uk[1]*dealias
-    fk[2] = factor3d*uk[2]*dealias
+    
+    fk[0] = factor3d/np.where(np.abs(uk[0])< 1e-5*N**3,np.inf, uk[0].conjugate())*dealias
+    fk[1] = factor3d/np.where(np.abs(uk[1])< 1e-5*N**3,np.inf, uk[1].conjugate())*dealias
+    fk[2] = factor3d/np.where(np.abs(uk[2])< 1e-5*N**3,np.inf, uk[2].conjugate())*dealias
+    
+    # factor[:] = 1/dt*np.where(np.abs(ek_arr0) < 1e-10, 0, (ek_arr0/ek_arr)**0.5 - 1) #! The factors for each shell is calculated
+    # factor3d[:] = factor[kint]
+    
+    # fk[0] = factor3d*uk[0]*dealias
+    # fk[1] = factor3d*uk[1]*dealias
+    # fk[2] = factor3d*uk[2]*dealias
     
     """Change forcing ends here here"""
     
@@ -287,9 +295,11 @@ def save(i,u,ek_arr):
     #          Calculating and printing
     # ----------- ----------------------------
     eng = comm.allreduce(np.sum(0.5*(u[0]**2 + u[1]**2 + u[2]**2)*dx*dy*dz), op = MPI.SUM)
+    divpos = comm.allreduce(np.max(np.abs(diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw))),op = MPI.MAX)
     #! Needs to be changed # dissp = -nu*comm.allreduce(np.sum((kc**(2*lp)*(np.abs(uk[0])**2 + np.abs(uk[1])**2) +sin_to_cos( ks**(2*lp)*(np.abs(uk[2])**2/alph**2 + np.abs(bk)**2)))), op = MPI.SUM)
     if rank == 0:
         print( "#----------------------------","\n",f"Energy at time {t[i]} is : {eng}","\n","#----------------------------")
+        print(f"Rank {rank} has divergence {divpos}")
         # print( "#----------------------------","\n",f"Total dissipation at time {t[i]} is : {dissp}","\n","#----------------------------")
         # print( "#----------------------------","\n",f" Rms field value at time {t[i]} is : {sqfld}","\n","#----------------------------")
     return "Done!"    
@@ -475,6 +485,12 @@ if begin or forcestart:
     uk[0] = uk[0] *(einit/ek_arr0[shell_no])**0.5
     uk[1] = uk[1] *(einit/ek_arr0[shell_no])**0.5
     uk[2] = uk[2] *(einit/ek_arr0[shell_no])**0.5
+    
+    
+    u[0] = irfft_mpi(uk[0], u[0])
+    u[1] = irfft_mpi(uk[1], u[1])
+    u[2] = irfft_mpi(uk[2], u[2])
+    
     
     ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
     ek_arr0 = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek a
