@@ -1,5 +1,5 @@
 
-# Ritwik 
+
 import numpy as np 
 from scipy.fft import fft ,  ifft ,  irfft2 ,  rfft2 , irfftn ,  rfftn, fftfreq, dst, dct, idst, idct, rfft,  irfft
 from mpi4py import MPI
