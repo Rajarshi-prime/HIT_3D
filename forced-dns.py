@@ -1,5 +1,4 @@
 
-
 import numpy as np 
 from scipy.fft import fft ,  ifft ,  irfft2 ,  rfft2 , irfftn ,  rfftn, fftfreq, dst, dct, idst, idct, rfft,  irfft
 from mpi4py import MPI
@@ -20,7 +19,7 @@ isforcing = True
 
 ## ------------- Time steps --------------
 T = 30
-dt =  0.002
+dt =  0.01
 dt_save = 1.0
 st = round(dt_save/dt)
 ## ---------------------------------------
@@ -28,7 +27,7 @@ st = round(dt_save/dt)
 ## -------------Defining the grid ---------------
 PI = np.pi
 TWO_PI = 2*PI
-N = 64
+N = 32
 Nf = N//2 + 1
 Np = N//num_process
 sx = slice(rank*Np ,  (rank+1)*Np)
@@ -57,11 +56,18 @@ if rank ==0 : print(kx_diff.shape, ky_diff.shape, kz_diff.shape)
 ## -------------------------------------------------
 
 ## ----------- Parameters ----------
-nu = 1/800 # Hyperviscosity
+nu = 1/100  # Hyperviscosity
 lp = 1 # Hyperviscosity power
-einit = 2 # Initial velocity amplitude
+einit = 10 # Initial velocity amplitude
 shell_no = 2 # Fixing the energy of this shell with a particular profile
 nshells = 1 # Number of consecutive shells to be forced
+
+
+#----  Kolmogorov length scale - \eta \epsilon etc...---------
+
+k_eta = N//3
+f0    = k_eta**4.0*nu**3.0
+
 
 
 param = dict()
@@ -204,14 +210,18 @@ def forcing(uk,fk):
     ek_arr[:] = np.where(np.abs(ek_arr)< 1e-10,np.inf, ek_arr)
     
     """Change forcing starts here"""
-    factor[:] = 0.
-    factor[shell_no] = 10*N**3
-    factor3d[:] = factor[kint]
+    ## Const Power Input
+    #factor[:] = 0.
+    #factor[shell_no] = f0*N**6/(2*PI)**3.0/(4*PI*shell_no**2.0)
+    #factor3d[:] = factor[kint]
     
-    fk[0] = factor3d/np.where(np.abs(uk[0])< 1e-5*N**3,np.inf, uk[0].conjugate())*dealias
-    fk[1] = factor3d/np.where(np.abs(uk[1])< 1e-5*N**3,np.inf, uk[1].conjugate())*dealias
-    fk[2] = factor3d/np.where(np.abs(uk[2])< 1e-5*N**3,np.inf, uk[2].conjugate())*dealias
+    #fk[0] = factor3d/np.where(np.abs(uk[0])< 1e-4*N**3,np.inf, uk[0].conjugate())*dealias
+    #fk[1] = factor3d/np.where(np.abs(uk[1])< 1e-4*N**3,np.inf, uk[1].conjugate())*dealias
+    #fk[2] = factor3d/np.where(np.abs(uk[2])< 1e-4*N**3,np.inf, uk[2].conjugate())*dealias
     
+    
+    ## Constant shell energy
+
     # factor[:] = 1/dt*np.where(np.abs(ek_arr0) < 1e-10, 0, (ek_arr0/ek_arr)**0.5 - 1) #! The factors for each shell is calculated
     # factor3d[:] = factor[kint]
     
@@ -482,9 +492,9 @@ if begin or forcestart:
     ek_arr0 = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek a
     # if rank ==0: print(ek_arr0, np.sum(ek_arr0))
     
-    uk[0] = uk[0] *(einit/ek_arr0[shell_no])**0.5
-    uk[1] = uk[1] *(einit/ek_arr0[shell_no])**0.5
-    uk[2] = uk[2] *(einit/ek_arr0[shell_no])**0.5
+    uk[0] = uk[0] *(einit/np.sum(ek_arr0))**0.5
+    uk[1] = uk[1] *(einit/np.sum(ek_arr0))**0.5
+    uk[2] = uk[2] *(einit/np.sum(ek_arr0))**0.5
     
     
     u[0] = irfft_mpi(uk[0], u[0])
