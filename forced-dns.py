@@ -19,7 +19,7 @@ isforcing = True
 
 ## ------------- Time steps --------------
 T = 30
-dt =  0.01
+dt =  0.05
 dt_save = 1.0
 st = round(dt_save/dt)
 ## ---------------------------------------
@@ -27,7 +27,7 @@ st = round(dt_save/dt)
 ## -------------Defining the grid ---------------
 PI = np.pi
 TWO_PI = 2*PI
-N = 32
+N = 256
 Nf = N//2 + 1
 Np = N//num_process
 sx = slice(rank*Np ,  (rank+1)*Np)
@@ -56,10 +56,10 @@ if rank ==0 : print(kx_diff.shape, ky_diff.shape, kz_diff.shape)
 ## -------------------------------------------------
 
 ## ----------- Parameters ----------
-nu = 1/100  # Hyperviscosity
+nu = 1/800  # Hyperviscosity
 lp = 1 # Hyperviscosity power
-einit = 10 # Initial velocity amplitude
-shell_no = 2 # Fixing the energy of this shell with a particular profile
+einit = 4.0 # Initial velocity amplitude
+shell_no = 1 # Fixing the energy of this shell with a particular profile
 nshells = 1 # Number of consecutive shells to be forced
 
 
@@ -211,24 +211,18 @@ def forcing(uk,fk):
     
     """Change forcing starts here"""
     ## Const Power Input
-    #factor[:] = 0.
-    #factor[shell_no] = f0*N**6/(2*PI)**3.0/(4*PI*shell_no**2.0)
-    #factor3d[:] = factor[kint]
-    
-    #fk[0] = factor3d/np.where(np.abs(uk[0])< 1e-4*N**3,np.inf, uk[0].conjugate())*dealias
-    #fk[1] = factor3d/np.where(np.abs(uk[1])< 1e-4*N**3,np.inf, uk[1].conjugate())*dealias
-    #fk[2] = factor3d/np.where(np.abs(uk[2])< 1e-4*N**3,np.inf, uk[2].conjugate())*dealias
-    
-    
-    ## Constant shell energy
+    factor[:] = 0.
+    factor[shell_no] = f0/(2*ek_arr[shell_no])
+    factor3d[:] = factor[kint]
+    # Constant shell energy
 
     # factor[:] = 1/dt*np.where(np.abs(ek_arr0) < 1e-10, 0, (ek_arr0/ek_arr)**0.5 - 1) #! The factors for each shell is calculated
     # factor3d[:] = factor[kint]
     
-    # fk[0] = factor3d*uk[0]*dealias
-    # fk[1] = factor3d*uk[1]*dealias
-    # fk[2] = factor3d*uk[2]*dealias
-    
+    fk[0] = factor3d*uk[0]*dealias
+    fk[1] = factor3d*uk[1]*dealias
+    fk[2] = factor3d*uk[2]*dealias
+
     """Change forcing ends here here"""
     
     pk[:] = invlap  * (kx*fk[0] + ky*fk[1] + kz*fk[2])*dealias
@@ -320,6 +314,8 @@ def evolve_and_save(t,  u):
     global begin
     h = t[1] - t[0]
     hypervisc= dealias*(1. + h*vis)**(-1)
+    semi_G =  np.exp(-nu*(k**(2*lp))*h)
+    semi_G_half =  np.exp(-0.5*nu*(k**(2*lp))*h)
     
     t3  = time()
     for i in range(t.size-1):
@@ -336,16 +332,18 @@ def evolve_and_save(t,  u):
         ## -------------------------------------------------- ##
         t3 = time()
         
-        fk[:] = forcing(uknew,fk)*dealias
         
         k1u[:] = RHS(uk, k1u)
         # k2u[:] = RHS(uk + h*k1u ,k2u) #! Only for RK2
-        k2u[:] = RHS(uk + h/2.*k1u ,k2u)
-        k3u[:] = RHS(uk + h/2.*k2u, k3u)
-        k4u[:] = RHS(uk + h*k3u, k4u)
+        k2u[:] = RHS(semi_G_half*(uk + h/2.*k1u) ,k2u)
+        k3u[:] = RHS(semi_G_half*uk + h/2.*k2u, k3u)
+        k4u[:] = RHS(semi_G*uk + semi_G_half*h*k3u, k4u)
         
         # uknew[:] = uk + h/2.0* ( k1u + k2u )
-        uknew[:] = (uk + h/6.0* ( k1u + 2*k2u + 2*k3u + k4u) + h* fk)*hypervisc                     
+        uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u) )*dealias
+         #*hypervisc                     
+        fk[:] = forcing(uknew,fk)*dealias
+        uknew[:] = (uknew + h*fk)*dealias
         # uknew[:] = hypervisc*(uknew)
 
         # uknew[:] = uknew + fk*dt
@@ -466,14 +464,14 @@ if begin or forcestart:
     thv = np.random.uniform(0, TWO_PI,  k.shape)
     thw = np.random.uniform(0, TWO_PI,  k.shape)
 
-    eprofile = kint**2*np.exp(-kint**2/20.)/normalize
+    eprofile = 1/np.where(kint ==0, np.inf,kint**(2.0))/normalize
     
     
     amp = (eprofile/np.where(kint == 0, np.inf, kint**2))**0.5
     
-    uk[0] = amp*np.exp(1j*thu)*(kint**2<kinit**2)*(kx>0)*(ky>0)*(kz>0)*dealias
-    uk[1] = amp*np.exp(1j*thv)*(kint**2<kinit**2)*(kx>0)*(ky>0)*(kz>0)*dealias
-    uk[2] = amp*np.exp(1j*thw)*(kint**2<kinit**2)*(kx>0)*(ky>0)*(kz>0)*dealias
+    uk[0] = amp*np.exp(1j*thu)*(kint**2<kinit**2)*(kint>0)*dealias
+    uk[1] = amp*np.exp(1j*thv)*(kint**2<kinit**2)*(kint>0)*dealias
+    uk[2] = amp*np.exp(1j*thw)*(kint**2<kinit**2)*(kint>0)*dealias
     
     u[0] = irfft_mpi(uk[0], u[0])
     u[1] = irfft_mpi(uk[1], u[1])
@@ -492,9 +490,9 @@ if begin or forcestart:
     ek_arr0 = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek a
     # if rank ==0: print(ek_arr0, np.sum(ek_arr0))
     
-    uk[0] = uk[0] *(einit/np.sum(ek_arr0))**0.5
-    uk[1] = uk[1] *(einit/np.sum(ek_arr0))**0.5
-    uk[2] = uk[2] *(einit/np.sum(ek_arr0))**0.5
+    uk[0] = uk[0] *(einit/ek_arr0[shell_no])**0.5
+    uk[1] = uk[1] *(einit/ek_arr0[shell_no])**0.5
+    uk[2] = uk[2] *(einit/ek_arr0[shell_no])**0.5
     
     
     u[0] = irfft_mpi(uk[0], u[0])
