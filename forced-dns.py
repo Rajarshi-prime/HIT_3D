@@ -15,6 +15,11 @@ comm = MPI.COMM_WORLD
 num_process =  comm.Get_size()
 rank = comm.Get_rank()
 isforcing = True
+viscosity_integrator = "implicit"
+# viscosity_integrator = "explicit"
+# viscosity_integrator = "exponential"
+if viscosity_integrator == "explicit": isexplicit = 1.
+else : isexplicit = 0.
 ## ---------------------------------------
 
 ## ------------- Time steps --------------
@@ -232,7 +237,7 @@ def forcing(uk,fk):
     fk[2] = fk[2] + kz*pk
     
     
-    return fk*isforcing
+    return fk*isforcing*dealias
     
      
 
@@ -263,9 +268,9 @@ def RHS(uk, uk_t):
     
 
     ## The RHS term with the pressure   
-    uk_t[0] = rhsuk - 1j*kx*pk #+ nu*lap*uk[0] 
-    uk_t[1] = rhsvk - 1j*ky*pk #+ nu*lap*uk[1] 
-    uk_t[2] = rhswk - 1j*kz*pk #+ nu*lap*uk[2]
+    uk_t[0] = rhsuk - 1j*kx*pk + nu*lap*uk[0]*isexplicit 
+    uk_t[1] = rhsvk - 1j*ky*pk + nu*lap*uk[1]*isexplicit 
+    uk_t[2] = rhswk - 1j*kz*pk + nu*lap*uk[2]*isexplicit
     
 
         
@@ -313,9 +318,14 @@ def save(i,u,ek_arr):
 def evolve_and_save(t,  u): 
     global begin
     h = t[1] - t[0]
-    hypervisc= dealias*(1. + h*vis)**(-1)
-    semi_G =  np.exp(-nu*(k**(2*lp))*h)
-    semi_G_half =  np.exp(-0.5*nu*(k**(2*lp))*h)
+    
+    if viscosity_integrator == "implicit": hypervisc= dealias*(1. + h*vis)**(-1)
+    else: hypervisc = 1.
+    
+    if  viscosity_integrator == "exponential": 
+        semi_G =  np.exp(-nu*(k**(2*lp))*h)
+        semi_G_half =  semi_G**0.5
+    else: semi_G = semi_G_half = 1.
     
     t3  = time()
     for i in range(t.size-1):
@@ -340,13 +350,9 @@ def evolve_and_save(t,  u):
         k4u[:] = RHS(semi_G*uk + semi_G_half*h*k3u, k4u)
         
         # uknew[:] = uk + h/2.0* ( k1u + k2u )
-        uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u) )*dealias
-         #*hypervisc                     
-        fk[:] = forcing(uknew,fk)*dealias
+        uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u) )*hypervisc                     
+        fk[:] = forcing(uknew,fk)
         uknew[:] = (uknew + h*fk)*dealias
-        # uknew[:] = hypervisc*(uknew)
-
-        # uknew[:] = uknew + fk*dt
         
         # comm.Barrier()
         uk[:] = uknew
