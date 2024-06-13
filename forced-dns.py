@@ -88,7 +88,9 @@ param["interval of saving indices"] = st
 ## ---------------------------------
 
 # savePath = pathlib.Path(f"/home/rajarshi.chattopadhyay/python/3D-DNS/data/samriddhi-tests-euler-spherical-dealias-final/N_{N}")
-savePath = pathlib.Path(f"./data/forced_{isforcing}/N_{N}_Re_{1/nu:.1f}")
+
+if nu!= 0: savePath = pathlib.Path(f"./data/forced_{isforcing}/N_{N}_Re_{1/nu:.1f}")
+else: savePath = pathlib.Path(f"./data/forced_{isforcing}/N_{N}_Re_inf")
 
 if rank == 0:
     print(savePath)
@@ -101,8 +103,8 @@ lap = -(kx**2 + ky**2 + kz**2 )
 k = (-lap)**0.5
 kint = np.clip(np.round(k,0).astype(int),None,N//2)
 # kh = (kx**2 + ky**2)**0.5
-# dealias = k<N/3 #! Spherical dealiasing
-dealias = (abs(kx)<N//3)*(abs(ky)<N//3)*(abs(kz)<N//3)
+dealias = k<=N/3 #! Spherical dealiasing
+# dealias = (abs(kx)<N//3)*(abs(ky)<N//3)*(abs(kz)<N//3)
 invlap = dealias/np.where(lap == 0, np.inf,  lap)
 
 # Hyperviscous operator
@@ -117,20 +119,20 @@ shells[0] = 0.
 ## -------------------------------------------------
 
 
-## -------------Empty arrays -----------------------
-u  = np.empty((3, Np, N, N), dtype= np.float64)
-omg= np.empty((3, Np, N, N), dtype= np.float64)
+## -------------zeros arrays -----------------------
+u  = np.zeros((3, Np, N, N), dtype= np.float64)
+omg= np.zeros((3, Np, N, N), dtype= np.float64)
 p = u[0].copy()
 
 
-uk = np.empty((3, N, Np, Nf), dtype= np.complex128)
+uk = np.zeros((3, N, Np, Nf), dtype= np.complex128)
 pk = uk[0].copy()
 bk = pk.copy()
 ek = np.zeros_like(pk, dtype = np.float64)
 ek_arr = np.zeros(Nf)
 factor = np.zeros(Nf)
 factor3d = np.zeros_like(pk,dtype= np.float64)
-uknew = np.empty_like(uk)
+uknew = np.zeros_like(uk)
 
 
 # theta2 = np.zeros((2,N, N, Np), dtype= np.complex128)
@@ -141,29 +143,29 @@ uknew = np.empty_like(uk)
 fk = np.zeros_like(uk)
 ff = np.zeros_like(u)
 
-rhsuk = np.empty_like(pk)
+rhsuk = np.zeros_like(pk)
 rhsvk = rhsuk.copy()
 rhswk = rhsuk.copy()
 
-rhsu = np.empty_like(p)
+rhsu = np.zeros_like(p)
 rhsv = rhsu.copy()
 rhsw = rhsu.copy()
 
-rhsu1 = np.empty_like(p)
-rhsu2 = np.empty_like(p)
-rhsu3 = np.empty_like(p)
+rhsu1 = np.zeros_like(p)
+rhsu2 = np.zeros_like(p)
+rhsu3 = np.zeros_like(p)
 
 
-k1u = np.empty((3, N, Np, Nf), dtype = np.complex128)
-k2u = np.empty((3, N, Np, Nf), dtype = np.complex128)
-k3u = np.empty((3, N, Np, Nf), dtype = np.complex128)
-k4u = np.empty((3, N, Np, Nf), dtype = np.complex128)
+k1u = np.zeros((3, N, Np, Nf), dtype = np.complex128)
+k2u = np.zeros((3, N, Np, Nf), dtype = np.complex128)
+k3u = np.zeros((3, N, Np, Nf), dtype = np.complex128)
+k4u = np.zeros((3, N, Np, Nf), dtype = np.complex128)
 
-arr_temp_k = np.empty((N, Np, N),dtype= np.float64)
-arr_temp_fr = np.empty((Np, N, Nf), dtype= np.complex128)      
-arr_temp_ifr = np.empty((N, Np, Nf), dtype= np.complex128)      
-arr_mpi = np.empty((num_process,  Np,  Np, Nf), dtype= np.complex128)
-arr_mpi_r = np.empty((num_process,  Np,  Np, N), dtype= np.float64)
+arr_temp_k = np.zeros((N, Np, N),dtype= np.float64)
+arr_temp_fr = np.zeros((Np, N, Nf), dtype= np.complex128)      
+arr_temp_ifr = np.zeros((N, Np, Nf), dtype= np.complex128)      
+arr_mpi = np.zeros((num_process,  Np,  Np, Nf), dtype= np.complex128)
+arr_mpi_r = np.zeros((num_process,  Np,  Np, N), dtype= np.float64)
 
 
 ## -----------------------------------------------------
@@ -284,10 +286,15 @@ def RHS(uk, uk_t):
 
 ## ---------------- Saving data + energy + Showing total energy ---------------------
 
-def save(i,u,ek_arr):
+def save(i,uk):
     
     # div = diff_x(u[0], rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw)
     # if rank == 0: print(f"Rank {rank} has divergence {np.sum(np.abs(div))}")
+    ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
+    ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
+    u[0] = irfft_mpi(uk[0], u[0])
+    u[1] = irfft_mpi(uk[1], u[1])
+    u[2] = irfft_mpi(uk[2], u[2])
     # ----------- ----------------------------
     #                 Saving the data (field)
     # ----------- ----------------------------
@@ -332,16 +339,12 @@ def evolve_and_save(t,  u):
         # if rank == 0:  print(f"step {i} in time {time() - t3}", end= '\r')
         ## ------------- saving the data -------------------- ##
         if i % st ==0 :
-            ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
-            ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
-            u[0] = irfft_mpi(uk[0], u[0])
-            u[1] = irfft_mpi(uk[1], u[1])
-            u[2] = irfft_mpi(uk[2], u[2])
-            save(i,u,ek_arr)
+            save(i,uk)
         begin = True   
         ## -------------------------------------------------- ##
         t3 = time()
         
+        fk[:] = forcing(uknew,fk)
         
         k1u[:] = RHS(uk, k1u)
         # k2u[:] = RHS(uk + h*k1u ,k2u) #! Only for RK2
@@ -350,9 +353,8 @@ def evolve_and_save(t,  u):
         k4u[:] = RHS(semi_G*uk + semi_G_half*h*k3u, k4u)
         
         # uknew[:] = uk + h/2.0* ( k1u + k2u )
-        uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u) )*hypervisc                     
-        fk[:] = forcing(uknew,fk)
-        uknew[:] = (uknew + h*fk)*dealias
+        uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  + h*fk)*hypervisc
+        # uknew[:] = (uknew + h*fk)
         
         # comm.Barrier()
         uk[:] = uknew
@@ -470,7 +472,8 @@ if begin or forcestart:
     thv = np.random.uniform(0, TWO_PI,  k.shape)
     thw = np.random.uniform(0, TWO_PI,  k.shape)
 
-    eprofile = 1/np.where(kint ==0, np.inf,kint**(2.0))/normalize
+    # eprofile = 1/np.where(kint ==0, np.inf,kint**(2.0))/normalize
+    eprofile = kint**2*np.exp(-kint**2/2)/normalize
     
     
     amp = (eprofile/np.where(kint == 0, np.inf, kint**2))**0.5
