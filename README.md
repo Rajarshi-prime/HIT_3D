@@ -3,4 +3,5 @@
 * Much of the idea of the code is borrowed from https://github.com/spectralDNS/spectralDNS.
 
 TO DOs:
-[ ] Put Particles in parallel. 
+
+- [ ] Put Particles in parallel.   
