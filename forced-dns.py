@@ -70,7 +70,7 @@ nshells = 1 # Number of consecutive shells to be forced
 
 #----  Kolmogorov length scale - \eta \epsilon etc...---------
 
-k_eta = N//3
+k_eta = 0.9*N//3
 f0    = k_eta**4.0*nu**3.0
 
 
@@ -103,7 +103,7 @@ lap = -(kx**2 + ky**2 + kz**2 )
 k = (-lap)**0.5
 kint = np.clip(np.round(k,0).astype(int),None,N//2)
 # kh = (kx**2 + ky**2)**0.5
-dealias = k<=N/3 #! Spherical dealiasing
+dealias = kint<=N/3 #! Spherical dealiasing
 # dealias = (abs(kx)<N//3)*(abs(ky)<N//3)*(abs(kz)<N//3)
 invlap = dealias/np.where(lap == 0, np.inf,  lap)
 
