@@ -255,9 +255,9 @@ def RHS(uk, uk_t):
     omg[1] = irfft_mpi(1j*(kz*uk[0] - kx*uk[2]),omg[1])
     omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0]),omg[2])
     
-    rhsu[:] = -(omg[2]*u[1] - omg[1]*u[2])
-    rhsv[:] = -(omg[0]*u[2] - omg[2]*u[0])
-    rhsw[:] = -(omg[1]*u[0] - omg[0]*u[1]) 
+    rhsu[:] = (omg[2]*u[1] - omg[1]*u[2])
+    rhsv[:] = (omg[0]*u[2] - omg[2]*u[0])
+    rhsw[:] = (omg[1]*u[0] - omg[0]*u[1]) 
     
     
     rhsuk[:]  = rfft_mpi(rhsu, rhsuk)*dealias 
