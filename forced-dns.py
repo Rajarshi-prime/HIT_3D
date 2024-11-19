@@ -387,7 +387,7 @@ def evolve_and_save(t,  u):
     u[2] = irfft_mpi(uk[2], u[2])
     ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
     ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
-    save(i+1, u,ek_arr)
+    save(i+1, uk)
     ## ---------------------------------------------
 
     
