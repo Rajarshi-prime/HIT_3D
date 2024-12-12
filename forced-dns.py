@@ -3,10 +3,7 @@ import numpy as np
 from scipy.fft import fft ,  ifft ,  irfft2 ,  rfft2 , irfftn ,  rfftn, fftfreq, dst, dct, idst, idct, rfft,  irfft
 from mpi4py import MPI
 from time import time
-import pathlib
-import datetime
-import os
-import sys
+import pathlib,datetime, h5py,os,sys
 curr_path = pathlib.Path(__file__).parent
 forcestart = True
 
@@ -24,7 +21,7 @@ else : isexplicit = 0.
 
 ## ------------- Time steps --------------
 T = 30
-dt =  0.05
+dt =  5e-4
 dt_save = 1.0
 st = round(dt_save/dt)
 ## ---------------------------------------
@@ -32,7 +29,7 @@ st = round(dt_save/dt)
 ## -------------Defining the grid ---------------
 PI = np.pi
 TWO_PI = 2*PI
-N = 256
+N = 1024
 Nf = N//2 + 1
 Np = N//num_process
 sx = slice(rank*Np ,  (rank+1)*Np)
@@ -61,9 +58,9 @@ if rank ==0 : print(kx_diff.shape, ky_diff.shape, kz_diff.shape)
 ## -------------------------------------------------
 
 ## ----------- Parameters ----------
-nu = 1/800  # Hyperviscosity
+nu = 2e-3  # Hyperviscosity
 lp = 1 # Hyperviscosity power
-einit = 4.0 # Initial velocity amplitude
+einit = 0.8*(TWO_PI)**3 # Initial velocity amplitude
 shell_no = 1 # Fixing the energy of this shell with a particular profile
 nshells = 1 # Number of consecutive shells to be forced
 
@@ -129,7 +126,9 @@ uk = np.zeros((3, N, Np, Nf), dtype= np.complex128)
 pk = uk[0].copy()
 bk = pk.copy()
 ek = np.zeros_like(pk, dtype = np.float64)
+Pik = np.zeros_like(pk, dtype = np.float64)
 ek_arr = np.zeros(Nf)
+Pik_arr = np.zeros(Nf)
 factor = np.zeros(Nf)
 factor3d = np.zeros_like(pk,dtype= np.float64)
 uknew = np.zeros_like(uk)
@@ -218,13 +217,13 @@ def forcing(uk,fk):
     
     """Change forcing starts here"""
     ## Const Power Input
-    factor[:] = 0.
-    factor[shell_no] = f0/(2*ek_arr[shell_no])
-    factor3d[:] = factor[kint]
+    # factor[:] = 0.
+    # factor[shell_no] = f0/(2*ek_arr[shell_no])
+    # factor3d[:] = factor[kint]
     # Constant shell energy
 
-    # factor[:] = 1/dt*np.where(np.abs(ek_arr0) < 1e-10, 0, (ek_arr0/ek_arr)**0.5 - 1) #! The factors for each shell is calculated
-    # factor3d[:] = factor[kint]
+    factor[:] = np.tanh(np.where(np.abs(ek_arr0) < 1e-10, 0, (ek_arr0/ek_arr)**0.5 - 1)) #! The factors for each shell is calculated
+    factor3d[:] = factor[kint]
     
     fk[0] = factor3d*uk[0]*dealias
     fk[1] = factor3d*uk[1]*dealias
@@ -246,7 +245,7 @@ def forcing(uk,fk):
 
 
 def RHS(uk, uk_t):
-    ## The RHS terms of u, v and w excluding the pressure and the hypervisocsity term 
+    ## The RHS terms of u, v and w excluding the forcing and the hypervisocsity term 
     u[0] = irfft_mpi(uk[0], u[0])
     u[1] = irfft_mpi(uk[1], u[1])
     u[2] = irfft_mpi(uk[2], u[2])
@@ -255,9 +254,9 @@ def RHS(uk, uk_t):
     omg[1] = irfft_mpi(1j*(kz*uk[0] - kx*uk[2]),omg[1])
     omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0]),omg[2])
     
-    rhsu[:] = -(omg[2]*u[1] - omg[1]*u[2])
-    rhsv[:] = -(omg[0]*u[2] - omg[2]*u[0])
-    rhsw[:] = -(omg[1]*u[0] - omg[0]*u[1]) 
+    rhsu[:] = (omg[2]*u[1] - omg[1]*u[2])
+    rhsv[:] = (omg[0]*u[2] - omg[2]*u[0])
+    rhsw[:] = (omg[1]*u[0] - omg[0]*u[1]) 
     
     
     rhsuk[:]  = rfft_mpi(rhsu, rhsuk)*dealias 
@@ -292,6 +291,12 @@ def save(i,uk):
     # if rank == 0: print(f"Rank {rank} has divergence {np.sum(np.abs(div))}")
     ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
     ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
+    
+    k1u[:] = RHS(uk, k1u)
+    Pik[:] = np.real(np.conjugate(uk[0])*k1u[0]+np.conjugate(uk[1])*k1u[1]+ np.conjugate(uk[2])*k1u[2])*dealias*normalize
+    Pik_arr[:] = comm.allreduce(e3d_to_e1d(Pik),op = MPI.SUM)
+    Pik_arr[:] = np.cumsum(Pik_arr[::-1])[::-1]
+    
     u[0] = irfft_mpi(uk[0], u[0])
     u[1] = irfft_mpi(uk[1], u[1])
     u[2] = irfft_mpi(uk[2], u[2])
@@ -305,17 +310,21 @@ def save(i,uk):
     comm.Barrier()
     np.savez_compressed(f"{new_dir}/Fields_{rank}",u = u[0],v = u[1],w = u[2])
     np.savez_compressed(f"{new_dir}/Energy_spectrum",ek = ek_arr)
+    np.savez_compressed(f"{new_dir}/Flux_spectrum",Pik = Pik_arr)
     
+    comm.Barrier()
     
     # ----------- ----------------------------
     #          Calculating and printing
     # ----------- ----------------------------
-    eng = comm.allreduce(np.sum(0.5*(u[0]**2 + u[1]**2 + u[2]**2)*dx*dy*dz), op = MPI.SUM)
+    eng1 = comm.allreduce(np.sum(0.5*(u[0]**2 + u[1]**2 + u[2]**2)*dx*dy*dz), op = MPI.SUM)
+    eng2 = np.sum(ek_arr)
     divpos = comm.allreduce(np.max(np.abs(diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw))),op = MPI.MAX)
-    #! Needs to be changed # dissp = -nu*comm.allreduce(np.sum((kc**(2*lp)*(np.abs(uk[0])**2 + np.abs(uk[1])**2) +sin_to_cos( ks**(2*lp)*(np.abs(uk[2])**2/alph**2 + np.abs(bk)**2)))), op = MPI.SUM)
+    #! Needs to be changed 
+    # # dissp = -nu*comm.allreduce(np.sum((kc**(2*lp)*(np.abs(uk[0])**2 + np.abs(uk[1])**2) +sin_to_cos( ks**(2*lp)*(np.abs(uk[2])**2/alph**2 + np.abs(bk)**2)))), op = MPI.SUM)
     if rank == 0:
-        print( "#----------------------------","\n",f"Energy at time {t[i]} is : {eng}","\n","#----------------------------")
-        print(f"Rank {rank} has divergence {divpos}")
+        print( "#----------------------------","\n",f"Energy at time {t[i]} is : {eng1}, {eng2}","\n","#----------------------------")
+        print(f"Maximum divergence {divpos}")
         # print( "#----------------------------","\n",f"Total dissipation at time {t[i]} is : {dissp}","\n","#----------------------------")
         # print( "#----------------------------","\n",f" Rms field value at time {t[i]} is : {sqfld}","\n","#----------------------------")
     return "Done!"    
@@ -387,7 +396,7 @@ def evolve_and_save(t,  u):
     u[2] = irfft_mpi(uk[2], u[2])
     ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
     ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
-    save(i+1, u,ek_arr)
+    save(i+1, uk)
     ## ---------------------------------------------
 
     
@@ -528,7 +537,7 @@ if begin or forcestart:
 
 #----------------- The initial energy ------------------
 e0 = comm.allreduce(0.5*dx*dy*dz*np.sum(u[0]**2 + u[1]**2 + (u[2]**2)),op = MPI.SUM)
-# if rank ==0 : print(np.sum(e0))
+if rank ==0 : print(f"Initial Physical space energy: {np.sum(e0)}")
 #-------------------------------------------------------
 
 # --------------------------------------------------

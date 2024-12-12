@@ -3,3 +3,7 @@
 *.err
 *.sh
 *.sub
+*.npy
+*.npz
+*.hdf5
+output_images/
