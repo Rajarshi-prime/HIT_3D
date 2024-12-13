@@ -5,7 +5,7 @@ from mpi4py import MPI
 from time import time
 import pathlib,datetime, h5py,os,sys
 curr_path = pathlib.Path(__file__).parent
-forcestart = True
+forcestart = False
 
 ## ---------------MPI things--------------
 comm = MPI.COMM_WORLD
@@ -319,12 +319,12 @@ def save(i,uk):
     # ----------- ----------------------------
     eng1 = comm.allreduce(np.sum(0.5*(u[0]**2 + u[1]**2 + u[2]**2)*dx*dy*dz), op = MPI.SUM)
     eng2 = np.sum(ek_arr)
-    divpos = comm.allreduce(np.max(np.abs(diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw))),op = MPI.MAX)
+    divmax = comm.allreduce(np.max(np.abs(diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw))),op = MPI.MAX)
     #! Needs to be changed 
     # # dissp = -nu*comm.allreduce(np.sum((kc**(2*lp)*(np.abs(uk[0])**2 + np.abs(uk[1])**2) +sin_to_cos( ks**(2*lp)*(np.abs(uk[2])**2/alph**2 + np.abs(bk)**2)))), op = MPI.SUM)
     if rank == 0:
         print( "#----------------------------","\n",f"Energy at time {t[i]} is : {eng1}, {eng2}","\n","#----------------------------")
-        print(f"Maximum divergence {divpos}")
+        print(f"Maximum divergence {divmax}")
         # print( "#----------------------------","\n",f"Total dissipation at time {t[i]} is : {dissp}","\n","#----------------------------")
         # print( "#----------------------------","\n",f" Rms field value at time {t[i]} is : {sqfld}","\n","#----------------------------")
     return "Done!"    
@@ -413,67 +413,47 @@ If not start from scratch."""
 
 
 
-begin = True ## It will change if we manage to load the data
-# Does a folder exist with parameters file? 
-paramfile = (savePath/f"params.txt")
 #! Modify the loading process!
 
-# loadPath = pathlib.Path("/home/rajarshi.chattopadhyay/python/3D-DNS/data/dt_test/Rk4/time_1.0")
-# initdata = np.load(loadPath/f"Fields_{rank}.npz")
-# u[0] = initdata["u"]
-# u[1] = initdata["v"]
-# u[2] = initdata["w"]
-
-# uk[0] = rfft_mpi(u[0], uk[0])
-# uk[1] = rfft_mpi(u[1], uk[1])
-# uk[2] = rfft_mpi(u[2], uk[2])
-
-# divpos = diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw)
-# if rank ==0 : print(f"Rank {rank} has divergence {np.sum(np.abs(divpos))}")
-
-
-# if paramfile.exists() and not forcestart:
-#     if rank ==0 : print("Paramfile Exists!")
-#     ## ------------------------- Beginning from existing data -------------------------
-#     """Load the parameters in the param file"""
-#     with open(paramfile,"r") as param_file:
-#         params_loaded = eval(param_file.read()) 
-
-#     """ Things that need to match"""
-#     keys = ["hyperviscous","time_step"]
-#     match = True
-#     for i in keys:
-#         if param[i] != params_loaded[i]: match = False
-        
+if not forcestart:
+    ## ------------------------- Beginning from existing data -------------------------
+    if rank ==0 : print("Found existing simulation! Using last saved data.")
+    """Loading the data from the last time  """    
+    paths = sorted([x for x in (savePath).iterdir() if "time_" in str(x)], key=os.path.getmtime)
+    """The folder is paths[-1]"""
+    paths = paths[-1]
+    tinit = float(str(paths).split("time_")[-1])
     
-#     if match:
-#         if rank ==0 : print("Found existing simulation! Using last saved data.")
-#         begin = False
-#         """Loading the data from the last time  """    
-#         paths = sorted([x for x in (savePath).iterdir() if "time_" in str(x)], key=os.path.getmtime)
-#         """The folder is paths[-1]"""
-#         paths = paths[-1]
-#         tinit = float(str(paths).split("time_")[-1])
+    #! Generalize this step
+    num_process_data = len([x for x in (paths).iterdir() if "Fields" in str(x)])
+    if rank ==0: print(f"Starting from time {tinit} with {num_process_data} files")
+    Ns = num_process_data//num_process
+    Nslab = N// num_process_data
+    """loading the data"""            
+    if Ns>0: 
+        for j in range(Ns):
+            field = np.load(paths/f"Fields_{rank*Ns+j}.npz")
+            u[0,j*Nslab:(j+1)*(Nslab),...] = field["u"]
+            u[1,j*Nslab:(j+1)*(Nslab),...] = field["v"]
+            u[2,j*Nslab:(j+1)*(Nslab),...] = field["w"]
         
-#         #! Generalize this step
-#         num_process_data = params_loaded["Processes"]
-#         Ns = num_process_data//num_process
-#         Nslab = N// num_process_data
-#         """loading the data"""            
-#         for j in range(Ns):
-#             field = np.load(paths/f"Fields_{rank*Ns+j}.npz")
-#             u[0,j*Nslab:(j+1)*(Nslab),...] = field["u"]
-#             u[1,j*Nslab:(j+1)*(Nslab),...] = field["v"]
-#             u[2,j*Nslab:(j+1)*(Nslab),...] = field["w"]
-#         del paths,num_process_data,Ns,Nslab
+    else: 
+        Ns = num_process//num_process_data
+        Nslab = N// num_process
+        field = np.load(paths/f"Fields_{rank//Ns:.0f}.npz")
+        for j in range(Ns):
+            u[0] = field["u"][j*Nslab:(j+1)*(Nslab),...]
+            u[1] = field["v"][j*Nslab:(j+1)*(Nslab),...]
+            u[2] = field["w"][j*Nslab:(j+1)*(Nslab),...]
         
-#         uk[0] = rfft_mpi(u[0], uk[0])
-#         uk[1] = rfft_mpi(u[1], uk[1])
-#         uk[2] = rfft_mpi(u[2], uk[2])
-#     del params_loaded,keys,match
+    del paths,num_process_data,Ns,Nslab
+     
+    uk[0] = rfft_mpi(u[0], uk[0])
+    uk[1] = rfft_mpi(u[1], uk[1])
+    uk[2] = rfft_mpi(u[2], uk[2])
     
 
-if begin or forcestart:
+if forcestart:
     ## ---------------------- Beginning from start ----------------------------------
 
     kinit = 31 # Wavenumber of maximum non-zero initial pressure mode.    
@@ -517,23 +497,19 @@ if begin or forcestart:
     u[1] = irfft_mpi(uk[1], u[1])
     u[2] = irfft_mpi(uk[2], u[2])
     
-    
-    ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
-    ek_arr0 = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek a
-    if rank ==0: print(ek_arr0, np.sum(ek_arr0))
-    
-    ek_arr0[0:shell_no] = 0.
-    ek_arr0[shell_no+ nshells:] = 0.
+    tinit = 0.
 
 
-    
-    divpos = diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw)
-    if rank ==0 : print(f"Rank {rank} has divergence {np.sum(np.abs(divpos))}")
+ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
+ek_arr0 = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek a
+if rank ==0: print(ek_arr0, np.sum(ek_arr0))
 
-        
-    # """Creating new params file"""
-    # with open(paramfile,"w") as f:
-    #     f.write(str(param))
+ek_arr0[0:shell_no] = 0.
+ek_arr0[shell_no+ nshells:] = 0.
+
+
+divmax = comm.allreduce(np.max(np.abs( diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw))),op = MPI.MAX)
+if rank ==0 : print(f" max divergence {divmax}")
 
 #----------------- The initial energy ------------------
 e0 = comm.allreduce(0.5*dx*dy*dz*np.sum(u[0]**2 + u[1]**2 + (u[2]**2)),op = MPI.SUM)
@@ -543,7 +519,6 @@ if rank ==0 : print(f"Initial Physical space energy: {np.sum(e0)}")
 # --------------------------------------------------
 
 ## ----- executing the code -------------------------
-tinit = 0.
 t = np.arange(tinit,T+ 0.5*dt, dt)
 # print(len(t))
 t1 = time()
