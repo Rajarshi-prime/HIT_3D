@@ -275,7 +275,7 @@ def RHS(uk, uk_t):
     
 
         
-    return uk_t
+    return uk_t *(-lap != 0)[None,:] #This is to to ensure that the zero mode does not get any rhs at k = 0 as u\cross \omega is non-zero for anisotropic particle field for mode zero. 
 
 
 
@@ -422,32 +422,28 @@ if not forcestart:
     paths = sorted([x for x in (savePath).iterdir() if "time_" in str(x)], key=os.path.getmtime)
     """The folder is paths[-1]"""
     paths = paths[-1]
-    tinit = float(str(paths).split("time_")[-1])
+    if rank ==0 : print(f"Loading data from {paths}")
+    # # tinit = float(str(paths).split("time_")[-1])
+    tinit = 22.0
     
-    #! Generalize this step
-    num_process_data = len([x for x in (paths).iterdir() if "Fields" in str(x)])
-    if rank ==0: print(f"Starting from time {tinit} with {num_process_data} files")
-    Ns = num_process_data//num_process
-    Nslab = N// num_process_data
-    """loading the data"""            
-    if Ns>0: 
-        for j in range(Ns):
-            field = np.load(paths/f"Fields_{rank*Ns+j}.npz")
-            u[0,j*Nslab:(j+1)*(Nslab),...] = field["u"]
-            u[1,j*Nslab:(j+1)*(Nslab),...] = field["v"]
-            u[2,j*Nslab:(j+1)*(Nslab),...] = field["w"]
-        
-    else: 
-        Ns = num_process//num_process_data
-        Nslab = N// num_process
-        field = np.load(paths/f"Fields_{rank//Ns:.0f}.npz")
-        for j in range(Ns):
-            u[0] = field["u"][j*Nslab:(j+1)*(Nslab),...]
-            u[1] = field["v"][j*Nslab:(j+1)*(Nslab),...]
-            u[2] = field["w"][j*Nslab:(j+1)*(Nslab),...]
-        
-    del paths,num_process_data,Ns,Nslab
-     
+    # load_num_slabs = 512
+    load_num_slabs = len([x for x in (paths).iterdir() if "Fields" in str(x)])
+    data_per_rank = N//load_num_slabs
+    rank_data = range(rank*Np,(rank + 1)*Np) # The rank contains these slices 
+    slab_old = np.inf
+    for lidx,j in enumerate(rank_data):
+        slab = j//data_per_rank
+        idx = j%data_per_rank
+        # print(f"Rank {rank} is loading slab {slab} and idx {idx}")
+        if slab_old != slab:  Field = np.load(savePath/f"time_{tinit:.1f}/Fields_{slab}.npz")
+        slab_old = slab
+        u[0,lidx] = Field['u'][idx]
+        u[1,lidx] = Field['v'][idx]
+        u[2,lidx] = Field['w'][idx]
+    del paths
+    comm.Barrier()
+    if rank ==0: print("Data loaded successfully")
+    
     uk[0] = rfft_mpi(u[0], uk[0])
     uk[1] = rfft_mpi(u[1], uk[1])
     uk[2] = rfft_mpi(u[2], uk[2])

@@ -5,7 +5,9 @@ import matplotlib.pyplot as plt
 from time import time
 import sys, concurrent.futures
 
-N = 128
+N = 256
+num_slab = 64
+t = 6.0
 PI = np.pi
 TWO_PI = 2*PI
 p = float(sys.argv[-1])
@@ -16,18 +18,20 @@ idxs = np.arange(N)
 vec = (np.array(np.meshgrid(idxs,idxs,idxs,indexing='ij'))).astype(int) - N//2
 norms = np.linalg.norm(vec,axis=0)
 g = np.zeros((N,N,N))
-kx,ky,kz = np.random.randint(1,N//3,(3,))
+
+#! Testing purposes
+# kx,ky,kz = np.random.randint(1,N//3,(3,))
 # u = np.array([np.sin(3*x)*np.cos(5*y)*np.sin(12*z),np.cos(kx*x)*np.sin(ky*y)*np.sin(kz*z),np.cos(kx*x)*np.cos(ky*y)*np.cos(kz*z)])
 # u = np.random.random((3,N,N,N))
 # u = u - u.mean()
+#* ----------------
+
 u = np.zeros((3,N,N,N))
-num_slab = 32
 Ns = N//num_slab
-t = 30.
 nu = 1/200
 isforcing = True
 for i in range(num_slab):
-    Field = np.load(f"/mnt/pfs/rajarshi.chattopadhyay/3D-DNS/data/forced_{isforcing}/N_{N}_Re_{1/nu:.1f}/time_{t:.1f}/Fields_{i}.npz")
+    Field = np.load(f"/mnt/pfs/rajarshi.chattopadhyay/3D-DNS/data_new/forced_{isforcing}/N_{N}_Re_{1/nu:.1f}/time_{t:.1f}/Fields_{i}.npz")
     u[0,i*Ns:(i+1)*Ns,:,:] = Field['u']
     u[1,i*Ns:(i+1)*Ns,:,:] = Field['v']
     u[2,i*Ns:(i+1)*Ns,:,:] = Field['w']
