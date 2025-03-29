@@ -275,7 +275,7 @@ def RHS(uk, uk_t):
     
 
         
-    return uk_t *(-lap != 0)[None,:] #This is to to ensure that the zero mode does not get any rhs at k = 0 as u\cross \omega is non-zero for anisotropic particle field for mode zero. 
+    return uk_t
 
 
 
