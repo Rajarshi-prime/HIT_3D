@@ -220,8 +220,9 @@ def forcing(uk,fk):
     # factor[:] = 0.
     # factor[shell_no] = f0/(2*ek_arr[shell_no])
     # factor3d[:] = factor[kint]
+    
+    
     # Constant shell energy
-
     factor[:] = np.tanh(np.where(np.abs(ek_arr0) < 1e-10, 0, (ek_arr0/ek_arr)**0.5 - 1)) #! The factors for each shell is calculated
     factor3d[:] = factor[kint]
     
