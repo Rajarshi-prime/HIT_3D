@@ -38,9 +38,8 @@ X = Y = Z = np.linspace(0, L, N, endpoint= False)
 dx,dy,dz = X[1]-X[0], Y[1]-Y[0], Z[1]-Z[0]
 x, y, z = np.meshgrid(X[sx], Y, Z, indexing='ij')
 
-Kx = Ky = Kz = fftfreq(N,  1./N)*TWO_PI/L
-Kz = Kz[:Nf]
-Kz[-1] = -Kz[-1]
+Kx = Ky = fftfreq(N,  1./N)*TWO_PI/L
+Kz = np.abs(Ky[:Nf])
 
 kx,  ky,  kz = np.meshgrid(Kx,  Ky[sx],  Kz,  indexing = 'ij')
 ## -----------------------------------------------
@@ -245,7 +244,7 @@ def forcing(uk,fk):
 
 
 
-def RHS(uk, uk_t):
+def RHS(uk, uk_t,visc = 1):
     ## The RHS terms of u, v and w excluding the forcing and the hypervisocsity term 
     u[0] = irfft_mpi(uk[0], u[0])
     u[1] = irfft_mpi(uk[1], u[1])
@@ -270,9 +269,9 @@ def RHS(uk, uk_t):
     
 
     ## The RHS term with the pressure   
-    uk_t[0] = rhsuk - 1j*kx*pk + nu*lap*uk[0]*isexplicit 
-    uk_t[1] = rhsvk - 1j*ky*pk + nu*lap*uk[1]*isexplicit 
-    uk_t[2] = rhswk - 1j*kz*pk + nu*lap*uk[2]*isexplicit
+    uk_t[0] = rhsuk - 1j*kx*pk + nu*lap*uk[0]*isexplicit * visc
+    uk_t[1] = rhsvk - 1j*ky*pk + nu*lap*uk[1]*isexplicit * visc
+    uk_t[2] = rhswk - 1j*kz*pk + nu*lap*uk[2]*isexplicit * visc
     
 
         
@@ -293,7 +292,7 @@ def save(i,uk):
     ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
     ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
     
-    k1u[:] = RHS(uk, k1u)
+    k1u[:] = RHS(uk, k1u,visc = 0)
     Pik[:] = np.real(np.conjugate(uk[0])*k1u[0]+np.conjugate(uk[1])*k1u[1]+ np.conjugate(uk[2])*k1u[2])*dealias*normalize
     Pik_arr[:] = comm.allreduce(e3d_to_e1d(Pik),op = MPI.SUM)
     Pik_arr[:] = np.cumsum(Pik_arr[::-1])[::-1]
