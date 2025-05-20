@@ -5,7 +5,7 @@ from mpi4py import MPI
 from time import time
 import pathlib,datetime, h5py,os,sys
 curr_path = pathlib.Path(__file__).parent
-forcestart = False
+forcestart = True
 
 ## ---------------MPI things--------------
 comm = MPI.COMM_WORLD
@@ -20,16 +20,16 @@ else : isexplicit = 0.
 ## ---------------------------------------
 
 ## ------------- Time steps --------------
-T = 30
-dt =  5e-4
-dt_save = 1.0
+N = 1024
+dt =  0.256/N #! Such that increasing resolution will decrease the dt
+T = 20
+dt_save = 0.5
 st = round(dt_save/dt)
 ## ---------------------------------------
 
 ## -------------Defining the grid ---------------
 PI = np.pi
 TWO_PI = 2*PI
-N = 1024
 Nf = N//2 + 1
 Np = N//num_process
 sx = slice(rank*Np ,  (rank+1)*Np)
@@ -57,24 +57,25 @@ if rank ==0 : print(kx_diff.shape, ky_diff.shape, kz_diff.shape)
 ## -------------------------------------------------
 
 ## ----------- Parameters ----------
-nu = 2e-3  # Hyperviscosity
 lp = 1 # Hyperviscosity power
-einit = 0.8*(TWO_PI)**3 # Initial velocity amplitude
-shell_no = 1 # Fixing the energy of this shell with a particular profile
+nu0 = 8.192 #! Viscosity for N = 1
+nu = nu0/(N**(4/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
+einit = 1*(TWO_PI)**3 # Initial energy
 nshells = 1 # Number of consecutive shells to be forced
+shell_no = np.arange(1,1+nshells) # the shells to be forced 
 
 
 #----  Kolmogorov length scale - \eta \epsilon etc...---------
 
-k_eta = 0.9*N//3
-f0    = k_eta**4.0*nu**3.0
+m = 2 #! Desired kmax*eta
+f0 = (nu0**3/(3*m)**4) * TWO_PI**3/ nshells #! Total power input at each shells
 
-
+if rank ==0 : print(f" Power input  density : {nshells*f0/TWO_PI**3} \n Viscosity : {nu}, Re : {1/nu}")
 
 param = dict()
 param["nu"] = nu
 param["hyperviscous"] = lp
-param["Initial p amplitude"] = einit
+param["Initial energy"] = einit
 param["Gridsize"] = N
 param["Processes"] = num_process
 param["Final_time"] = T
@@ -112,6 +113,8 @@ normalize = np.where((kz== 0) + (kz == N//2) , 1/(N**6/TWO_PI**3),2/(N**6/TWO_PI
 shells = np.arange(-0.5,Nf, 1.)
 shells[0] = 0.
 
+cond_ky = np.abs(np.round(Ky))<=N//3
+cond_kz = np.abs(np.round(Kz))<=N//3
 ## -------------------------------------------------
 
 
@@ -205,6 +208,9 @@ def e3d_to_e1d(x): #1 Based on whether k is 2D or 3D, it will bin the data accor
     return np.histogram(k.ravel(),bins = shells,weights=x.ravel())[0] 
 
     
+    
+
+
 def forcing(uk,fk):
     """
     Calculates the net dissipation of the flow and injects that amount into larges scales of the horizontal flow
@@ -214,16 +220,17 @@ def forcing(uk,fk):
     ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
     ek_arr[:] = np.where(np.abs(ek_arr)< 1e-10,np.inf, ek_arr)
     
+    
     """Change forcing starts here"""
-    ## Const Power Input
-    # factor[:] = 0.
-    # factor[shell_no] = f0/(2*ek_arr[shell_no])
-    # factor3d[:] = factor[kint]
-    
-    
-    # Constant shell energy
-    factor[:] = np.tanh(np.where(np.abs(ek_arr0) < 1e-10, 0, (ek_arr0/ek_arr)**0.5 - 1)) #! The factors for each shell is calculated
+    # Const Power Input
+    factor[:] = 0.
+    factor[shell_no] = f0/(2*ek_arr[shell_no])
     factor3d[:] = factor[kint]
+    
+    
+    # # Constant shell energy
+    # factor[:] = np.tanh(np.where(np.abs(ek_arr0) < 1e-10, 0, (ek_arr0/ek_arr)**0.5 - 1)) #! The factors for each shell is calculated
+    # factor3d[:] = factor[kint]
     
     fk[0] = factor3d*uk[0]*dealias
     fk[1] = factor3d*uk[1]*dealias
@@ -284,6 +291,10 @@ def RHS(uk, uk_t,visc = 1):
 
 
 ## ---------------- Saving data + energy + Showing total energy ---------------------
+def load_trunc(x):
+    x1 = np.zeros((*x.shape[:-2],N,Nf),dtype = np.complex128)
+    x1[...,cond_ky,:x.shape[-1]] = x.copy()
+    return irfftn(x1,(N,N), axes = (-2,-1))
 
 def save(i,uk):
     
@@ -308,7 +319,11 @@ def save(i,uk):
     except FileExistsError: pass
     
     comm.Barrier()
-    np.savez_compressed(f"{new_dir}/Fields_{rank}",u = u[0],v = u[1],w = u[2])
+
+    u_temp = rfftn(u, axes = (-2,-1))[...,cond_ky, :N//3+1] #! Will only save the values in x k_x and k_y plane for the dealiased mode. 
+    
+    np.savez_compressed(f"{new_dir}/Fields_cmp_{rank}",u = u_temp[0],v = u_temp[1],w = u_temp[2])
+    # np.savez_compressed(f"{new_dir}/Fields_cmp_{rank}",u = u[0],v = u[1],w = u[2])
     np.savez_compressed(f"{new_dir}/Energy_spectrum",ek = ek_arr)
     np.savez_compressed(f"{new_dir}/Flux_spectrum",Pik = Pik_arr)
     
@@ -344,7 +359,9 @@ def evolve_and_save(t,  u):
     else: semi_G = semi_G_half = 1.
     
     t3  = time()
+    calc_time = 0
     for i in range(t.size-1):
+        # calc_time += time() - t3
         # if rank == 0:  print(f"step {i} in time {time() - t3}", end= '\r')
         ## ------------- saving the data -------------------- ##
         if i % st ==0 :
@@ -397,6 +414,7 @@ def evolve_and_save(t,  u):
     ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
     ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
     save(i+1, uk)
+    if rank ==0: print(f"average calculation time per step {calc_time/(t.size-1)}")
     ## ---------------------------------------------
 
     
@@ -419,12 +437,16 @@ if not forcestart:
     ## ------------------------- Beginning from existing data -------------------------
     if rank ==0 : print("Found existing simulation! Using last saved data.")
     """Loading the data from the last time  """    
+    # paths = sorted([x for x in pathlib.Path("/mnt/pfs/rajarshi.chattopadhyay/codes/HIT_3D/data/forced_True/N_64_Re_1000.0").iterdir() if "time_" in str(x)], key=os.path.getmtime)
+    
+    
     paths = sorted([x for x in (savePath).iterdir() if "time_" in str(x)], key=os.path.getmtime)
     """The folder is paths[-1]"""
     paths = paths[-1]
+
     if rank ==0 : print(f"Loading data from {paths}")
-    # # tinit = float(str(paths).split("time_")[-1])
-    tinit = 22.0
+    tinit = float(str(paths).split("time_")[-1])
+    # tinit = 0.0
     
     # load_num_slabs = 512
     load_num_slabs = len([x for x in (paths).iterdir() if "Fields" in str(x)])
@@ -434,12 +456,24 @@ if not forcestart:
     for lidx,j in enumerate(rank_data):
         slab = j//data_per_rank
         idx = j%data_per_rank
+        
         # print(f"Rank {rank} is loading slab {slab} and idx {idx}")
-        if slab_old != slab:  Field = np.load(savePath/f"time_{tinit:.1f}/Fields_{slab}.npz")
+        
+        """Loading the truncated data"""
+        if slab_old != slab:  Field = np.load(paths/f"Fields_cmp_{slab}.npz")
         slab_old = slab
-        u[0,lidx] = Field['u'][idx]
-        u[1,lidx] = Field['v'][idx]
-        u[2,lidx] = Field['w'][idx]
+        u[0,lidx] = load_trunc(Field['u'][idx])
+        u[1,lidx] = load_trunc(Field['v'][idx])
+        u[2,lidx] = load_trunc(Field['w'][idx])
+        
+        
+        """Loading the OG data"""
+        # if slab_old != slab:  Field = np.load(paths/f"Fields_{slab}.npz")
+        # slab_old = slab
+        # u[0,lidx] = Field['u'][idx]
+        # u[1,lidx] = Field['v'][idx]
+        # u[2,lidx] = Field['w'][idx]
+        
     del paths
     comm.Barrier()
     if rank ==0: print("Data loaded successfully")
@@ -483,10 +517,10 @@ if forcestart:
     ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
     ek_arr0 = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek a
     # if rank ==0: print(ek_arr0, np.sum(ek_arr0))
-    
-    uk[0] = uk[0] *(einit/ek_arr0[shell_no])**0.5
-    uk[1] = uk[1] *(einit/ek_arr0[shell_no])**0.5
-    uk[2] = uk[2] *(einit/ek_arr0[shell_no])**0.5
+    e0 = np.sum(ek_arr0)
+    uk[0] = uk[0] *(einit/e0)**0.5
+    uk[1] = uk[1] *(einit/e0)**0.5
+    uk[2] = uk[2] *(einit/e0)**0.5
     
     
     u[0] = irfft_mpi(uk[0], u[0])
@@ -500,8 +534,8 @@ ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #
 ek_arr0 = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek a
 if rank ==0: print(ek_arr0, np.sum(ek_arr0))
 
-ek_arr0[0:shell_no] = 0.
-ek_arr0[shell_no+ nshells:] = 0.
+ek_arr0[0:shell_no[0]] = 0.
+ek_arr0[shell_no[-1] + 1:] = 0.
 
 
 divmax = comm.allreduce(np.max(np.abs( diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw))),op = MPI.MAX)
@@ -527,3 +561,4 @@ if rank ==0:
     with open(savePath/f"calcTime.txt","a") as f:
         f.write(str({f"time taken to run from {tinit} to {T} is": t2}))
 ## --------------------------------------------------
+
