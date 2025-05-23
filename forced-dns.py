@@ -59,8 +59,10 @@ if rank ==0 : print(kx_diff.shape, ky_diff.shape, kz_diff.shape)
 ## ----------- Parameters ----------
 lp = 1 # Hyperviscosity power
 nu0 = 8.192 #! Viscosity for N = 1
+# nu0 = 4.714 #! Viscosity from Pope's 256 run 
 nu = nu0/(N**(4/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
 einit = 1*(TWO_PI)**3 # Initial energy
+# einit = 0.5*(TWO_PI)**3 # Initial energy for pope's viscosity
 nshells = 1 # Number of consecutive shells to be forced
 shell_no = np.arange(1,1+nshells) # the shells to be forced 
 
@@ -70,7 +72,7 @@ shell_no = np.arange(1,1+nshells) # the shells to be forced
 m = 2 #! Desired kmax*eta
 f0 = (nu0**3/(3*m)**4) * TWO_PI**3/ nshells #! Total power input at each shells
 
-if rank ==0 : print(f" Power input  density : {nshells*f0/TWO_PI**3} \n Viscosity : {nu}, Re : {1/nu}")
+if rank ==0 : print(f" Power input  density : {nshells*f0/TWO_PI**3} \n Viscosity : {nu}, Re : {1/nu},dt : {dt}")
 
 param = dict()
 param["nu"] = nu
@@ -361,8 +363,8 @@ def evolve_and_save(t,  u):
     t3  = time()
     calc_time = 0
     for i in range(t.size-1):
-        # calc_time += time() - t3
-        # if rank == 0:  print(f"step {i} in time {time() - t3}", end= '\r')
+        calc_time += time() - t3
+        if rank == 0:  print(f"step {i} in time {time() - t3}", end= '\r')
         ## ------------- saving the data -------------------- ##
         if i % st ==0 :
             save(i,uk)
