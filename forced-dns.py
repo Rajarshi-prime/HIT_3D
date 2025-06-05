@@ -5,7 +5,7 @@ from mpi4py import MPI
 from time import time
 import pathlib,datetime, h5py,os,sys
 curr_path = pathlib.Path(__file__).parent
-forcestart = True
+forcestart = False
 
 ## ---------------MPI things--------------
 comm = MPI.COMM_WORLD
@@ -480,9 +480,9 @@ if not forcestart:
     comm.Barrier()
     if rank ==0: print("Data loaded successfully")
     
-    uk[0] = rfft_mpi(u[0], uk[0])
-    uk[1] = rfft_mpi(u[1], uk[1])
-    uk[2] = rfft_mpi(u[2], uk[2])
+    uk[0] = rfft_mpi(u[0], uk[0])*dealias
+    uk[1] = rfft_mpi(u[1], uk[1])*dealias
+    uk[2] = rfft_mpi(u[2], uk[2])*dealias
     
 
 if forcestart:
