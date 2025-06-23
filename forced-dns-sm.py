@@ -1,11 +1,13 @@
-
+"""
+Evolves forced dns with small stokes particles in the slow manifold approximation
+"""
 import numpy as np 
-from scipy.fft import fft ,  ifft ,  irfft2 ,  rfft2 , irfftn ,  rfftn,   rfft,  irfft,fftfreq
+from scipy.fft import fft ,  ifft ,  irfft2 ,  rfft2 , irfftn ,  rfftn, fftfreq, rfft, irfft
 from mpi4py import MPI
 from time import time
 import pathlib,os,sys,h5py
 curr_path = pathlib.Path(__file__).parent
-forcestart = True
+forcestart = False
 
 ## ---------------MPI things--------------
 comm = MPI.COMM_WORLD
@@ -21,10 +23,12 @@ else : isexplicit = 0.
 
 ## ------------- Time steps --------------
 N = 256
-dt = 0.256/N #! Such that increasing resolution will decrease the dt
-T = 100
-dt_save = 1.0
+dt =  0.256/N #! Such that increasing resolution will decrease the dt
+T = 40
+dt_save = 0.5
 st = round(dt_save/dt)
+
+
 ## ---------------------------------------
 
 ## -------------Defining the grid ---------------
@@ -58,20 +62,21 @@ if rank ==0 : print(kx_diff.shape, ky_diff.shape, kz_diff.shape)
 
 ## ----------- Parameters ----------
 lp = 1 # Hyperviscosity power
-# nu0 = 8.192 #! Viscosity for N = 1
+# nu0 = 3.251 #! Viscosity for N = 1
 # nu0 = 4.714 #! Viscosity from Pope's 256 run 
 nu0 = 3.5 #! Viscosity for N = 1
-m = 2.0 #! Desired kmax*eta
+m = 1.5 #! Desired kmax*eta
 nu = nu0*(m/N)**(4/3)  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
-# nu = nu0/(N**(4/3))  
+# nu = nu0/(N**(4/3))  #? old school new one should give the same value at m = 2.0
 
-einit = 1*(TWO_PI)**3 # Initial energy
+einit = 1*(TWO_PI)*3 # Initial energy
 # einit = 0.5*(TWO_P*I)**3 # Initial energy for pope's viscosity
 
-nshells = 3 # Number of consecutive shells to be forced
+nshells = 1 # Number of consecutive shells to be forced
 shell_no = np.arange(1,1+nshells) # the shells to be forced 
 
-
+tf = (9*(m/N)**(2/3))/nu0 #* the desired kolvmogorov time scale 
+tp = 0.1*tf # The particle timescale
 #----  Kolmogorov length scale - \eta \epsilon etc...---------
 
 f0 = (nu0**3/81) * TWO_PI**3/ nshells #! Total power input at each shells
@@ -90,6 +95,7 @@ param["interval of saving indices"] = st
 
 ## ---------------------------------
 
+# savePath = pathlib.Path(f"/home/rajarshi.chattopadhyay/python/3D-DNS/data/samriddhi-tests-euler-spherical-dealias-final/N_{N}")
 
 if nu!= 0: savePath = pathlib.Path(f"./data/forced_{isforcing}/N_{N}_Re_{1/nu:.1f}")
 else: savePath = pathlib.Path(f"./data/forced_{isforcing}/N_{N}_Re_inf")
@@ -112,6 +118,8 @@ invlap = dealias/np.where(lap == 0, np.inf,  lap)
 # Hyperviscous operator
 vis = nu*(k)**(2*lp) ## This is in Fourier Space
 
+# Forcing length scales
+# cond = (kh>0.5)*(kh<2.5)
 normalize = np.where((kz== 0) + (kz == N//2) , 1/(N**6/TWO_PI**3),2/(N**6/TWO_PI**3))
 shells = np.arange(-0.5,Nf, 1.)
 shells[0] = 0.
@@ -123,10 +131,15 @@ cond_kz = np.abs(np.round(Kz))<=N//3
 
 ## -------------zeros arrays -----------------------
 u  = np.zeros((3, Np, N, N), dtype= np.float64)
+v  = np.zeros((3, Np, N, N), dtype= np.float64)
+vn  = np.zeros((3, Np, N, N), dtype= np.float64)
 omg= np.zeros((3, Np, N, N), dtype= np.float64)
+n = u[0].copy()
+nnew = n.copy()
 
 
 uk = np.zeros((3, N, Np, Nf), dtype= np.complex128)
+vnk = np.zeros((3, N, Np, Nf), dtype= np.complex128)
 pk = uk[0].copy()
 ek = np.zeros_like(pk, dtype = np.float64)
 Pik = np.zeros_like(pk, dtype = np.float64)
@@ -135,6 +148,8 @@ Pik_arr = np.zeros(Nf)
 factor = np.zeros(Nf)
 factor3d = np.zeros_like(pk,dtype= np.float64)
 uknew = np.zeros_like(uk)
+
+
 
 
 fk = np.zeros_like(uk)
@@ -147,11 +162,20 @@ rhsu = np.zeros_like(u[0])
 rhsv = rhsu.copy()
 rhsw = rhsu.copy()
 
+# rhsu1 = np.zeros_like(u[0])
+# rhsu2 = np.zeros_like(u[0])
+# rhsu3 = np.zeros_like(u[0])
+
 
 k1u = np.zeros((3, N, Np, Nf), dtype = np.complex128)
 k2u = np.zeros((3, N, Np, Nf), dtype = np.complex128)
 k3u = np.zeros((3, N, Np, Nf), dtype = np.complex128)
 k4u = np.zeros((3, N, Np, Nf), dtype = np.complex128)
+
+k1n = n.copy()
+k2n = n.copy()
+k3n = n.copy()
+k4n = n.copy()
 
 arr_temp_k = np.zeros((N, Np, N),dtype= np.float64)
 arr_temp_fr = np.zeros((Np, N, Nf), dtype= np.complex128)      
@@ -209,6 +233,7 @@ def forcing(uk,fk):
     ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
     
     ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
+    
     #? Only if you are forcing 1 or two shells 
     # for shell in shell_no:
     #     ek_arr[shell] = comm.allreduce(np.sum(ek*(kint>= shell-0.5)*(kint< shell +0.5)),op = MPI.SUM)
@@ -241,10 +266,16 @@ def forcing(uk,fk):
     return fk*isforcing*dealias
     
      
+def clip_zero(x):
+    """Clips negative values to zero and rescales the to conserve the mean
+    """
+    oldmean = comm.allreduce(np.sum(x),op = MPI.SUM)/N**3
+    x[:] = np.clip(x,0,None)
+    newmean = comm.allreduce(np.sum(x),op = MPI.SUM)/N**3
+    
+    return x*oldmean/newmean
 
-
-
-def RHS(uk, uk_t,visc = 1,forc = 1):
+def RHS(uk, n, uk_t,n_t,visc = 1,forc = 1):
     ## The RHS terms of u, v and w excluding the forcing and the hypervisocsity term 
     fk[:] = forcing(uk,fk)
     
@@ -261,9 +292,9 @@ def RHS(uk, uk_t,visc = 1,forc = 1):
     rhsw[:] = (omg[1]*u[0] - omg[0]*u[1]) 
     
     
-    rhsuk[:]  = (rfft_mpi(rhsu, rhsuk) + fk[0])*dealias*forc 
-    rhsvk[:]  = (rfft_mpi(rhsv, rhsvk) + fk[1])*dealias*forc 
-    rhswk[:]  = (rfft_mpi(rhsw, rhswk) + fk[2])*dealias*forc 
+    rhsuk[:]  = (rfft_mpi(rhsu, rhsuk) + fk[0])*dealias*forc
+    rhsvk[:]  = (rfft_mpi(rhsv, rhsvk) + fk[1])*dealias*forc
+    rhswk[:]  = (rfft_mpi(rhsw, rhswk) + fk[2])*dealias*forc
     
     ## The pressure term
     pk[:] = 1j*invlap  * (kx*rhsuk + ky*rhsvk + kz*rhswk)
@@ -275,9 +306,19 @@ def RHS(uk, uk_t,visc = 1,forc = 1):
     uk_t[1] = rhsvk - 1j*ky*pk - nu*((-lap)**lp)*uk[1]*isexplicit * visc
     uk_t[2] = rhswk - 1j*kz*pk - nu*((-lap)**lp)*uk[2]*isexplicit * visc
     
-
+    
+    #the rhs for the number density
+    v[0] = irfft_mpi((uk[0] - tp*(1j*kx*pk - nu*((-lap)**lp)*uk[0]*isexplicit * visc))*dealias, v[0])
+    v[1] = irfft_mpi((uk[1] - tp*(1j*ky*pk - nu*((-lap)**lp)*uk[1]*isexplicit * visc))*dealias, v[1])
+    v[2] = irfft_mpi((uk[2] - tp*(1j*kz*pk - nu*((-lap)**lp)*uk[2]*isexplicit * visc))*dealias, v[2])
+    
+    vn[:] = n[None,...]*v
+    vnk[0] = rfft_mpi(vn[0],vnk[0])*dealias
+    vnk[1] = rfft_mpi(vn[1],vnk[1])*dealias
+    vnk[2] = rfft_mpi(vn[2],vnk[2])*dealias
+    n_t[:] = irfft_mpi(1j* (kx*vnk[0] + ky*vnk[1] + kz*vnk[2]), n_t)
         
-    return uk_t 
+    return uk_t ,-n_t
 
 
 
@@ -290,8 +331,8 @@ def load_trunc(x):
     x1 = np.zeros((*x.shape[:-2],N,Nf),dtype = np.complex128)
     x1[...,cond_ky,:x.shape[-1]] = x.copy()
     return irfftn(x1,(N,N), axes = (-2,-1))
-
-def load_npz(paths,u):
+    
+def load_npz(paths,u,n,tp = tp, tf = tf,loadn=  True):
     load_num_slabs = len([x for x in (paths).iterdir() if "Fields" in str(x) and ".npz" in str(x)])
     data_per_rank = N//load_num_slabs
     rank_data = range(rank*Np,(rank + 1)*Np) # The rank contains these slices 
@@ -305,12 +346,13 @@ def load_npz(paths,u):
         """Loading the truncated data"""
         if slab_old != slab:  
             Field = np.load(paths/f"Fields_cmp_{slab}.npz")
+            if loadn== True:nField = np.load(paths/f"st_{tp/tf:.2f}/n_{slab}.npz")
         slab_old = slab
         u[0,lidx] = load_trunc(Field['u'][idx])
         u[1,lidx] = load_trunc(Field['v'][idx])
         u[2,lidx] = load_trunc(Field['w'][idx])
-
-        
+        if loadn== True: n[lidx] = nField['n'][idx]
+        else: n[lidx] = 1.0
         
         """Loading the OG data"""
         # if slab_old != slab:  Field = np.load(paths/f"Fields_{slab}.npz")
@@ -319,28 +361,31 @@ def load_npz(paths,u):
         # u[1,lidx] = Field['v'][idx]
         # u[2,lidx] = Field['w'][idx]
         
-    return u
+    return u, n
     
-
-def load_hdf5(paths, u):
+    
+def load_hdf5(paths, u, n,tp =tp, tf = tf):
     with h5py.File(paths/'Fields.hdf5','r+', driver = 'mpio', comm = comm) as f:
         u[0] = f['u'][sx,...][:]
         u[1] = f['v'][sx,...][:]
         u[2] = f['w'][sx,...][:]
+        n[:] = f[f'/st_{tp/tf:.3f}/n'][sx,...][:]
     
-    return u
+    return u,n
 
-
-def save(i,uk):
+def save(i,uk,n,tf = tf, tp = tp):
     
+    # div = diff_x(u[0], rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw)
+    # if rank == 0: print(f"Rank {rank} has divergence {np.sum(np.abs(div))}")
     ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
     
-    k1u[:] = RHS(uk, k1u,visc = 0,forc = 0)
-    ek_arr[:] = 0.0
-    ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
+    k1u[:],_ = RHS(uk,n, k1u,k1n, visc = 0,forc = 0.0)
     Pik[:] = np.real(np.conjugate(uk[0])*k1u[0]+np.conjugate(uk[1])*k1u[1]+ np.conjugate(uk[2])*k1u[2])*dealias*normalize
     Pik_arr[:] = comm.allreduce(e3d_to_e1d(Pik),op = MPI.SUM)
     Pik_arr[:] = np.cumsum(Pik_arr[::-1])[::-1]
+    
+    ek_arr[:] = 0.0
+    ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
     
     u[0] = irfft_mpi(uk[0], u[0])
     u[1] = irfft_mpi(uk[1], u[1])
@@ -348,16 +393,18 @@ def save(i,uk):
     # ----------- ----------------------------
     #                 Saving the data (field)
     # ----------- ----------------------------
-    new_dir = savePath/f"mrinal/time_{t[i]:.1f}"
+    new_dir = savePath/f"time_{t[i]:.1f}/st_{tp/tf:.2f}"
     try: new_dir.mkdir(parents=True,  exist_ok=True)
     except FileExistsError: pass
+    new_dir = new_dir.parent #* coming back to the old directory
     comm.Barrier()
-    # np.savez_compressed(f"{new_dir}/Fields_{rank}.npz",uhat = uk)
-    # np.savez_compressed(f"{new_dir}/Fields_{rank}",u = u[0],v = u[1],w = u[2])
 
     u_temp = rfftn(u, axes = (-2,-1))[...,cond_ky, :N//3+1] #! Will only save the values in x k_x and k_y plane for the dealiased mode. 
     
     np.savez_compressed(f"{new_dir}/Fields_cmp_{rank}",u = u_temp[0],v = u_temp[1],w = u_temp[2])
+    np.savez_compressed(f"{new_dir}/st_{tp/tf:.2f}/n_{rank}",n = n)
+    
+    # np.savez_compressed(f"{new_dir}/Fields_cmp_{rank}",u = u[0],v = u[1],w = u[2])
     np.savez_compressed(f"{new_dir}/Energy_spectrum",ek = ek_arr)
     np.savez_compressed(f"{new_dir}/Flux_spectrum",Pik = Pik_arr)
     
@@ -368,20 +415,30 @@ def save(i,uk):
     # ----------- ----------------------------
     eng1 = comm.allreduce(np.sum(0.5*(u[0]**2 + u[1]**2 + u[2]**2)*dx*dy*dz), op = MPI.SUM)
     eng2 = np.sum(ek_arr)
+    nmin = comm.allreduce(np.min(n), op = MPI.MIN)
+    nmax = comm.allreduce(np.max(n), op = MPI.MAX)
+    nmean = comm.allreduce(np.sum(n), op = MPI.SUM)/N**3
     divmax = comm.allreduce(np.max(np.abs(diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw))),op = MPI.MAX)
     #! Needs to be changed 
     # # dissp = -nu*comm.allreduce(np.sum((kc**(2*lp)*(np.abs(uk[0])**2 + np.abs(uk[1])**2) +sin_to_cos( ks**(2*lp)*(np.abs(uk[2])**2/alph**2 + np.abs(bk)**2)))), op = MPI.SUM)
     if rank == 0:
         print( "#----------------------------","\n",f"Energy at time {t[i]} is : {eng1}, {eng2}","\n","#----------------------------")
         print(f"Maximum divergence {divmax}")
+        print(f"n mean, max ,min : {nmean, nmax, nmin}")
         # print( "#----------------------------","\n",f"Total dissipation at time {t[i]} is : {dissp}","\n","#----------------------------")
-    return "Done!"    
 
-def save_hdf5(i,uk):
+    return "Done!"    
     
+    
+    
+    
+def save_hdf5(i,uk,n,tf = tf, tp = tp):
+    
+    # div = diff_x(u[0], rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw)
+    # if rank == 0: print(f"Rank {rank} has divergence {np.sum(np.abs(div))}")
     ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
     
-    k1u[:] = RHS(uk, k1u, visc = 0,forc = 0.0)
+    k1u[:],_ = RHS(uk,n, k1u,k1n, visc = 0,forc = 0.0)
     Pik[:] = np.real(np.conjugate(uk[0])*k1u[0]+np.conjugate(uk[1])*k1u[1]+ np.conjugate(uk[2])*k1u[2])*dealias*normalize
     Pik_arr[:] = comm.allreduce(e3d_to_e1d(Pik),op = MPI.SUM)
     Pik_arr[:] = np.cumsum(Pik_arr[::-1])[::-1]
@@ -412,9 +469,14 @@ def save_hdf5(i,uk):
         f.attrs['nu'] = nu
         f.attrs['Power input'] = f0 /TWO_PI**3
         f.attrs['eta'] = m/(N//3)
-        f.attrs['t_eta'] = (9*(m/N)**(2/3))/nu0
+        f.attrs['t_eta'] = tf
         f.attrs['forcing'] = f"Isotropic with const power input in shells {shell_no}"
         f.attrs['N'] = N
+    
+        ndat= f.create_dataset(f'/st_{tp/tf:.3f}/n', (N,N,N),dtype = np.float64)
+        ndat[sx,...] = n
+        ndat.attrs['t_f'] = tf
+        ndat.attrs['t_p'] = tp
         
 
     comm.Barrier()
@@ -424,20 +486,25 @@ def save_hdf5(i,uk):
     # ----------- ----------------------------
     eng1 = comm.allreduce(np.sum(0.5*(u[0]**2 + u[1]**2 + u[2]**2)*dx*dy*dz), op = MPI.SUM)
     eng2 = np.sum(ek_arr)
+    nmin = comm.allreduce(np.min(n), op = MPI.MIN)
+    nmax = comm.allreduce(np.max(n), op = MPI.MAX)
+    nmean = comm.allreduce(np.sum(n), op = MPI.SUM)/N**3
     divmax = comm.allreduce(np.max(np.abs(diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw))),op = MPI.MAX)
     #! Needs to be changed 
     # # dissp = -nu*comm.allreduce(np.sum((kc**(2*lp)*(np.abs(uk[0])**2 + np.abs(uk[1])**2) +sin_to_cos( ks**(2*lp)*(np.abs(uk[2])**2/alph**2 + np.abs(bk)**2)))), op = MPI.SUM)
     if rank == 0:
         print( "#----------------------------","\n",f"Energy at time {t[i]} is : {eng1}, {eng2}","\n","#----------------------------")
         print(f"Maximum divergence {divmax}")
+        print(f"n mean, max ,min : {nmean, nmax, nmin}")
         # print( "#----------------------------","\n",f"Total dissipation at time {t[i]} is : {dissp}","\n","#----------------------------")
-    return "Done!"   
-    
+    comm.Barrier()
+    return "Done!"        
 ## -------------------------------------------------    
     
 ## ------------- Evolving the system ----------------- 
-def evolve_and_save(t,  u): 
-    global begin
+def evolve_and_save(t,  u,n): 
+
+    comm.Barrier()
     h = t[1] - t[0]
     
     if viscosity_integrator == "implicit": hypervisc= dealias*(1. + h*vis)**(-1)
@@ -450,34 +517,34 @@ def evolve_and_save(t,  u):
     
     t3  = time()
     calc_time = 0
+    uk[0] = rfft_mpi(u[0], uk[0])*dealias
+    uk[1] = rfft_mpi(u[1], uk[1])*dealias
+    uk[2] = rfft_mpi(u[2], uk[2])*dealias
+    
     for i in range(t.size-1):
         calc_time += time() - t3
         if rank == 0:  print(f"step {i} in time {time() - t3}", end= '\r')
         ## ------------- saving the data -------------------- ##
         if i % st ==0 :
-            # save_hdf5(i,uk)
-            save(i,uk)
-        begin = True   
+            save_hdf5(i,uk,n)
         ## -------------------------------------------------- ##
         t3 = time()
+        comm.Barrier()
         
         # fk[:] = forcing(uknew,fk)
         
-        k1u[:] = RHS(uk, k1u)
-        # k2u[:] = RHS(uk + h*k1u ,k2u) #! Only for RK2
-        k2u[:] = RHS(semi_G_half*(uk + h/2.*k1u) ,k2u)
-        k3u[:] = RHS(semi_G_half*uk + h/2.*k2u, k3u)
-        k4u[:] = RHS(semi_G*uk + semi_G_half*h*k3u, k4u)
+        k1u[:],k1n[:] = RHS(uk,n, k1u,k1n)
+        # k2u[:],k2n[:] = RHS(uk + h*k1u ,k2u) #! Only for RK2
+        k2u[:],k2n[:] = RHS(semi_G_half*(uk + h/2.*k1u), clip_zero(n + h/2.*k1n), k2u,k2n)
+        k3u[:],k3n[:] = RHS(semi_G_half*uk + h/2.*k2u,clip_zero(n + h/2.*k2n),  k3u,k3n)
+        k4u[:],k4n[:] = RHS(semi_G*uk + semi_G_half*h*k3u,clip_zero(n + h*k3n) ,k4u,k4n)
         
-        # uknew[:] = uk + h/2.0* ( k1u + k2u )  
-        uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  )*hypervisc
-        
-        
+        # uknew[:] = uk + h/2.0* ( k1u + k2u )
         # uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  + h*fk)*hypervisc
-        # uknew[:] = (uknew + h*fk)
+        uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  )*hypervisc
+        nnew[:] = clip_zero(n + h/6.0*(k1n + 2*(k2n + k3n )  + k4n))
         
-        
-        
+        n[:] = nnew
         """Enforcing div free conditon"""
         pk[:] = invlap  * (kx*uknew[0] + ky*uknew[1] + kz*uknew[2])
         uknew[0] = uknew[0] - kx*pk
@@ -495,8 +562,7 @@ def evolve_and_save(t,  u):
         uk[2] = rfft_mpi(u[2],uk[2])
   
   
-        #! Althought RHS should obey the above two conditions, the rfft adds dependent degrees of freedom for kz = 0 that is evolved separately. Therefore, in some extreme cases, numerical errors can build up. We add the two lines to avoid them.
-        # ------------------------------------- #
+        #! Althought RHS should obey the above two conditions, the rfft adds dependent degrees of freedom for kz = 0 that is evolved separately. Additionally, in some extreme cases, numerical errors can build up. We add these lines to avoid them.
         
         
         
@@ -510,7 +576,7 @@ def evolve_and_save(t,  u):
         comm.Barrier()
         
     ## ---------- Saving the final data ------------
-    save(i+1, uk)
+    save_hdf5(i+1, uk,n)
     if rank ==0: print(f"average calculation time per step {calc_time/(t.size-1)}")
     ## ---------------------------------------------
 
@@ -534,20 +600,24 @@ if not forcestart:
     ## ------------------------- Beginning from existing data -------------------------
     if rank ==0 : print("Found existing simulation! Using last saved data.")
     """Loading the data from the last time  """    
-    paths = sorted([x for x in pathlib.Path("/mnt/pfs/rajarshi.chattopadhyay/codes/HIT_3D/data/forced_True/N_512_Re_500.0").iterdir() if "time_" in str(x)], key=os.path.getmtime)
+    
+    # paths = sorted([x for x in pathlib.Path("/mnt/pfs/rajarshi.chattopadhyay/codes/HIT_3D/data/forced_True/N_256_Re_198.4").iterdir() if "time_" in str(x)], key=os.path.getmtime)
+    paths = pathlib.Path("/mnt/pfs/rajarshi.chattopadhyay/codes/HIT_3D/data/forced_True/N_256_Re_270.5/time_20.0/")
+    tinit = 20.0
     
     
     # paths = sorted([x for x in (savePath).iterdir() if "time_" in str(x)], key=os.path.getmtime)
-    """The folder is paths[-1]"""
-    paths = paths[-2]
+    # """The folder is paths[-1]"""
+    # paths = paths[-2]
+    # tinit = float(str(paths).split("time_")[-1])
 
     if rank ==0 : print(f"Loading data from {paths}")
-    # tinit = float(str(paths).split("time_")[-1])
-    tinit = 0.0
     
-    u = load_npz(paths,u) 
-    # u = load_hdf5(paths,u) 
-        
+    # load_num_slabs = 512
+    u,n = load_npz(paths,u, n,loadn = False)
+    # u,n = load_hdf5(paths,u,n)
+    
+
     del paths
     comm.Barrier()
     if rank ==0: print("Data loaded successfully")
@@ -624,8 +694,10 @@ if rank ==0 : print(f"Initial Physical space energy: {np.sum(e0)}")
 
 ## ----- executing the code -------------------------
 t = np.arange(tinit,T+ 0.5*dt, dt)
+# print(len(t))
 t1 = time()
-evolve_and_save(t,u)
+# n = np.ones_like(p)
+evolve_and_save(t,u,n)
 t2 = time() - t1 
 # --------------------------------------------------
 if rank ==0: print(t2)

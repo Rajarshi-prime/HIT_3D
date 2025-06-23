@@ -13,3 +13,6 @@ test_basic.py
 test.py
 vel-diff.py
 restart_code.py
+forced-dns-old.py
+parallel_test.h5
+test_parallel_hdf5.py
