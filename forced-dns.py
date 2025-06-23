@@ -5,7 +5,8 @@ from mpi4py import MPI
 from time import time
 import pathlib,os,sys,h5py
 curr_path = pathlib.Path(__file__).parent
-forcestart = True
+# forcestart = True
+forcestart = bool(float(sys.argv[-1]))
 
 ## ---------------MPI things--------------
 comm = MPI.COMM_WORLD
@@ -478,11 +479,6 @@ def evolve_and_save(t,  u):
         
         
         
-        """Enforcing div free conditon"""
-        pk[:] = invlap  * (kx*uknew[0] + ky*uknew[1] + kz*uknew[2])
-        uknew[0] = uknew[0] - kx*pk
-        uknew[1] = uknew[1] - ky*pk
-        uknew[2] = uknew[2] - kz*pk
         
         
         """ Enforcing the reality condition """
@@ -493,9 +489,18 @@ def evolve_and_save(t,  u):
         uk[0] = rfft_mpi(u[0],uk[0])
         uk[1] = rfft_mpi(u[1],uk[1])
         uk[2] = rfft_mpi(u[2],uk[2])
+        
+        
+        """Enforcing div free conditon"""
+        pk[:] = invlap  * (kx*uk[0] + ky*uk[1] + kz*uk[2])
+        uk[0] = uk[0] - kx*pk
+        uk[1] = uk[1] - ky*pk
+        uk[2] = uk[2] - kz*pk
+        
+        # uk[:] = uknew.copy()
   
   
-        #! Althought RHS should obey the above two conditions, the rfft adds dependent degrees of freedom for kz = 0 that is evolved separately. Therefore, in some extreme cases, numerical errors can build up. We add the two lines to avoid them.
+        #! Although RHS should obey the above two conditions, the rfft adds dependent degrees of freedom for kz = 0 that is evolved separately. Therefore, in some extreme cases, numerical errors can build up. We add the two projections to avoid them.
         # ------------------------------------- #
         
         
@@ -534,16 +539,16 @@ if not forcestart:
     ## ------------------------- Beginning from existing data -------------------------
     if rank ==0 : print("Found existing simulation! Using last saved data.")
     """Loading the data from the last time  """    
-    paths = sorted([x for x in pathlib.Path("/mnt/pfs/rajarshi.chattopadhyay/codes/HIT_3D/data/forced_True/N_512_Re_500.0").iterdir() if "time_" in str(x)], key=os.path.getmtime)
+    # paths = sorted([x for x in pathlib.Path("/mnt/pfs/rajarshi.chattopadhyay/codes/HIT_3D/data/forced_True/N_512_Re_500.0").iterdir() if "time_" in str(x)], key=os.path.getmtime)
     
     
-    # paths = sorted([x for x in (savePath).iterdir() if "time_" in str(x)], key=os.path.getmtime)
+    paths = sorted([x for x in (savePath).iterdir() if "time_" in str(x)], key=os.path.getmtime)
     """The folder is paths[-1]"""
     paths = paths[-2]
 
     if rank ==0 : print(f"Loading data from {paths}")
-    # tinit = float(str(paths).split("time_")[-1])
-    tinit = 0.0
+    tinit = float(str(paths).split("time_")[-1])
+    # tinit = 0.0
     
     u = load_npz(paths,u) 
     # u = load_hdf5(paths,u) 
