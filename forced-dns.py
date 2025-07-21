@@ -5,13 +5,15 @@ from mpi4py import MPI
 from time import time
 import pathlib,os,sys,h5py
 curr_path = pathlib.Path(__file__).parent
-# forcestart = True
-forcestart = bool(float(sys.argv[-1]))
+forcestart = True
+# forcestart = bool(float(sys.argv[-1]))
 
 ## ---------------MPI things--------------
 comm = MPI.COMM_WORLD
 num_process =  comm.Get_size()
 rank = comm.Get_rank()
+#print(num_process,rank)
+#raise SystemExit
 isforcing = True
 # viscosity_integrator = "implicit"
 viscosity_integrator = "explicit"
@@ -19,11 +21,10 @@ viscosity_integrator = "explicit"
 if viscosity_integrator == "explicit": isexplicit = 1.
 else : isexplicit = 0.
 ## ---------------------------------------
-
 ## ------------- Time steps --------------
-N = 256
+N = 512
 dt = 0.256/N #! Such that increasing resolution will decrease the dt
-T = 100
+T = 20
 dt_save = 1.0
 st = round(dt_save/dt)
 ## ---------------------------------------
@@ -69,7 +70,7 @@ nu = nu0*(m/N)**(4/3)  #? scaling with resolution. For 512, nu = 0.002 #! Need t
 einit = 1*(TWO_PI)**3 # Initial energy
 # einit = 0.5*(TWO_P*I)**3 # Initial energy for pope's viscosity
 
-nshells = 3 # Number of consecutive shells to be forced
+nshells = 1 # Number of consecutive shells to be forced
 shell_no = np.arange(1,1+nshells) # the shells to be forced 
 
 
@@ -349,7 +350,7 @@ def save(i,uk):
     # ----------- ----------------------------
     #                 Saving the data (field)
     # ----------- ----------------------------
-    new_dir = savePath/f"mrinal/time_{t[i]:.1f}"
+    new_dir = savePath/f"time_{t[i]:.1f}"
     try: new_dir.mkdir(parents=True,  exist_ok=True)
     except FileExistsError: pass
     comm.Barrier()
@@ -402,14 +403,16 @@ def save_hdf5(i,uk):
     comm.Barrier()
 
     with h5py.File(new_dir/'Fields.hdf5','w', driver = 'mpio', comm = comm) as f:
-        f.create_dataset('u', (N,N,N),dtype = np.float64)
-        f.create_dataset('v', (N,N,N),dtype = np.float64)
-        f.create_dataset('w', (N,N,N),dtype = np.float64)
+        f.create_dataset('uk', (N,N,Nf),dtype = np.complex128)
+        f.create_dataset('vk', (N,N,Nf),dtype = np.complex128)
+        f.create_dataset('wk', (N,N,Nf),dtype = np.complex128)
+        # raise SystemExit
         f.create_dataset('Energy_Spectrum', data = ek_arr,dtype = np.float64)
         f.create_dataset('Flux_Spectrum', data = Pik_arr,dtype = np.float64)
-        f['u'][sx,...] = u[0]
-        f['v'][sx,...] = u[1]
-        f['w'][sx,...] = u[2]
+        
+        f['uk'][:,sx,...] = uk[0]*dealias
+        f['vk'][:,sx,...] = uk[1]*dealias
+        f['wk'][:,sx,...] = uk[2]*dealias
         f.attrs['nu'] = nu
         f.attrs['Power input'] = f0 /TWO_PI**3
         f.attrs['eta'] = m/(N//3)
@@ -456,7 +459,7 @@ def evolve_and_save(t,  u):
         if rank == 0:  print(f"step {i} in time {time() - t3}", end= '\r')
         ## ------------- saving the data -------------------- ##
         if i % st ==0 :
-            # save_hdf5(i,uk)
+        #     save_hdf5(i,uk)
             save(i,uk)
         begin = True   
         ## -------------------------------------------------- ##
@@ -493,9 +496,9 @@ def evolve_and_save(t,  u):
         
         """Enforcing div free conditon"""
         pk[:] = invlap  * (kx*uk[0] + ky*uk[1] + kz*uk[2])
-        uk[0] = uk[0] - kx*pk
-        uk[1] = uk[1] - ky*pk
-        uk[2] = uk[2] - kz*pk
+        uk[0] = uk[0] + kx*pk
+        uk[1] = uk[1] + ky*pk
+        uk[2] = uk[2] + kz*pk
         
         # uk[:] = uknew.copy()
   
@@ -515,6 +518,7 @@ def evolve_and_save(t,  u):
         comm.Barrier()
         
     ## ---------- Saving the final data ------------
+    # save_hdf5(i+1, uk)
     save(i+1, uk)
     if rank ==0: print(f"average calculation time per step {calc_time/(t.size-1)}")
     ## ---------------------------------------------
