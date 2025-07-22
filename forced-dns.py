@@ -12,17 +12,16 @@ forcestart = True
 comm = MPI.COMM_WORLD
 num_process =  comm.Get_size()
 rank = comm.Get_rank()
-#print(num_process,rank)
-#raise SystemExit
+
 isforcing = True
-# viscosity_integrator = "implicit"
-viscosity_integrator = "explicit"
+viscosity_integrator = "implicit" 
+# viscosity_integrator = "explicit" #! Do not use this for hyperviscous simulations or cases with high resolution simulations.
 # viscosity_integrator = "exponential"
 if viscosity_integrator == "explicit": isexplicit = 1.
 else : isexplicit = 0.
 ## ---------------------------------------
 ## ------------- Time steps --------------
-N = 512
+N = 384
 dt = 0.256/N #! Such that increasing resolution will decrease the dt
 T = 20
 dt_save = 1.0
@@ -59,12 +58,12 @@ if rank ==0 : print(kx_diff.shape, ky_diff.shape, kz_diff.shape)
 ## -------------------------------------------------
 
 ## ----------- Parameters ----------
-lp = 1 # Hyperviscosity power
+lp = 8 # Hyperviscosity power
 # nu0 = 8.192 #! Viscosity for N = 1
 # nu0 = 4.714 #! Viscosity from Pope's 256 run 
-nu0 = 3.5 #! Viscosity for N = 1
+nu0 = 0.8 #! Viscosity for N = 1
 m = 2.0 #! Desired kmax*eta
-nu = nu0*(m/N)**(4/3)  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
+nu = nu0*(3*m/N)**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
 # nu = nu0/(N**(4/3))  
 
 einit = 1*(TWO_PI)**3 # Initial energy
@@ -76,7 +75,7 @@ shell_no = np.arange(1,1+nshells) # the shells to be forced
 
 #----  Kolmogorov length scale - \eta \epsilon etc...---------
 
-f0 = (nu0**3/81) * TWO_PI**3/ nshells #! Total power input at each shells
+f0 = (nu0)**3 * TWO_PI**3/ nshells #! Total power input at each shells
 
 if rank ==0 : print(f" Power input  density : {nshells*f0/TWO_PI**3} \n Viscosity : {nu}, Re : {1/nu},dt : {dt}")
 
@@ -248,7 +247,7 @@ def forcing(uk,fk):
 
 def RHS(uk, uk_t,visc = 1,forc = 1):
     ## The RHS terms of u, v and w excluding the forcing and the hypervisocsity term 
-    fk[:] = forcing(uk,fk)
+    fk[:] = forcing(uk,fk)*forc
     
     u[0] = irfft_mpi(uk[0], u[0])
     u[1] = irfft_mpi(uk[1], u[1])
@@ -263,9 +262,9 @@ def RHS(uk, uk_t,visc = 1,forc = 1):
     rhsw[:] = (omg[1]*u[0] - omg[0]*u[1]) 
     
     
-    rhsuk[:]  = (rfft_mpi(rhsu, rhsuk) + fk[0])*dealias*forc 
-    rhsvk[:]  = (rfft_mpi(rhsv, rhsvk) + fk[1])*dealias*forc 
-    rhswk[:]  = (rfft_mpi(rhsw, rhswk) + fk[2])*dealias*forc 
+    rhsuk[:]  = (rfft_mpi(rhsu, rhsuk) + fk[0])*dealias 
+    rhsvk[:]  = (rfft_mpi(rhsv, rhsvk) + fk[1])*dealias 
+    rhswk[:]  = (rfft_mpi(rhsw, rhswk) + fk[2])*dealias 
     
     ## The pressure term
     pk[:] = 1j*invlap  * (kx*rhsuk + ky*rhsvk + kz*rhswk)
