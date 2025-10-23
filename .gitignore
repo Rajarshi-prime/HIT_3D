@@ -7,7 +7,6 @@
 *.npz
 *.hdf5
 output_images/
-sfunc.py
 structure-func.py
 test_basic.py
 test.py

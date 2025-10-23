@@ -21,7 +21,7 @@ if viscosity_integrator == "explicit": isexplicit = 1.
 else : isexplicit = 0.
 ## ---------------------------------------
 ## ------------- Time steps --------------
-N = 384
+N = 512
 dt = 0.256/N #! Such that increasing resolution will decrease the dt
 T = 20
 dt_save = 1.0
