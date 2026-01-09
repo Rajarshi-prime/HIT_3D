@@ -12,7 +12,7 @@ forcestart = True
 comm = MPI.COMM_WORLD
 num_process =  comm.Get_size()
 rank = comm.Get_rank()
-
+phase_shifted = False
 isforcing = True
 viscosity_integrator = "implicit" 
 # viscosity_integrator = "explicit" #! Do not use this for hyperviscous simulations or cases with high resolution simulations.
@@ -108,6 +108,11 @@ kint = np.clip(np.round(k,0).astype(int),None,N//2)
 # kh = (kx**2 + ky**2)**0.5
 dealias = kint<=N/3 #! Spherical dealiasing
 # dealias = (abs(kx)<N//3)*(abs(ky)<N//3)*(abs(kz)<N//3)
+if phase_shifted: 
+    dealias = kint<=2**0.5*N/3 #! Spherical dealiasing
+    phase_k = np.exp(1j*(kx*dx/2. + ky*dy/2. + kz*dz/2.)) *dealias
+    conjphase_k = np.conjugate(phase_k)*dealias
+
 invlap = dealias/np.where(lap == 0, np.inf,  lap)
 
 # Hyperviscous operator
@@ -244,41 +249,109 @@ def forcing(uk,fk):
      
 
 
+if phase_shifted: 
+    def RHS(uk, uk_t,visc = 1,forc = 1,rhsuk = rhsuk, rhsvk = rhsvk, rhswk = rhswk):
+        """Calcualte the nonlinear term u times omega pseudospectrally using phase-shifted dealiasing ref. Canuto et al. 2006,2007, and Patterson and Orszag 1971"""
+        ## The RHS terms of u, v and w excluding the forcing and the hypervisocsity term 
+        
+        
+        fk[:] = forcing(uk,fk)*forc
+        
 
-def RHS(uk, uk_t,visc = 1,forc = 1):
-    ## The RHS terms of u, v and w excluding the forcing and the hypervisocsity term 
-    fk[:] = forcing(uk,fk)*forc
-    
-    u[0] = irfft_mpi(uk[0], u[0])
-    u[1] = irfft_mpi(uk[1], u[1])
-    u[2] = irfft_mpi(uk[2], u[2])
-    
-    omg[0] = irfft_mpi(1j*(ky*uk[2] - kz*uk[1]),omg[0])
-    omg[1] = irfft_mpi(1j*(kz*uk[0] - kx*uk[2]),omg[1])
-    omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0]),omg[2])
-    
-    rhsu[:] = (omg[2]*u[1] - omg[1]*u[2])
-    rhsv[:] = (omg[0]*u[2] - omg[2]*u[0])
-    rhsw[:] = (omg[1]*u[0] - omg[0]*u[1]) 
-    
-    
-    rhsuk[:]  = (rfft_mpi(rhsu, rhsuk) + fk[0])*dealias 
-    rhsvk[:]  = (rfft_mpi(rhsv, rhsvk) + fk[1])*dealias 
-    rhswk[:]  = (rfft_mpi(rhsw, rhswk) + fk[2])*dealias 
-    
-    ## The pressure term
-    pk[:] = 1j*invlap  * (kx*rhsuk + ky*rhsvk + kz*rhswk)
-    
-    
 
-    ## The RHS term with the pressure   
-    uk_t[0] = rhsuk - 1j*kx*pk - nu*((-lap)**lp)*uk[0]*isexplicit * visc
-    uk_t[1] = rhsvk - 1j*ky*pk - nu*((-lap)**lp)*uk[1]*isexplicit * visc
-    uk_t[2] = rhswk - 1j*kz*pk - nu*((-lap)**lp)*uk[2]*isexplicit * visc
-    
+        u[0] = irfft_mpi(uk[0]*dealias, u[0])
+        u[1] = irfft_mpi(uk[1]*dealias, u[1])
+        u[2] = irfft_mpi(uk[2]*dealias, u[2])
 
         
-    return uk_t 
+        omg[0] = irfft_mpi(1j*(ky*uk[2] - kz*uk[1])*dealias,omg[0])
+        omg[1] = irfft_mpi(1j*(kz*uk[0] - kx*uk[2])*dealias,omg[1])
+        omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0])*dealias,omg[2])
+
+        
+        rhsu[:] = (omg[2]*u[1] - omg[1]*u[2])
+        rhsv[:] = (omg[0]*u[2] - omg[2]*u[0])
+        rhsw[:] = (omg[1]*u[0] - omg[0]*u[1])
+
+        
+        
+        rhsuk[:]  = (rfft_mpi(rhsu, rhsuk) )*dealias*0.5
+        rhsvk[:]  = (rfft_mpi(rhsv, rhsvk) )*dealias*0.5
+        rhswk[:]  = (rfft_mpi(rhsw, rhswk) )*dealias*0.5
+
+        
+        
+        
+        u[0] = irfft_mpi(uk[0]*phase_k*dealias, u[0])
+        u[1] = irfft_mpi(uk[1]*phase_k*dealias, u[1])
+        u[2] = irfft_mpi(uk[2]*phase_k*dealias, u[2])
+
+        
+        
+        omg[0] = irfft_mpi(1j*(ky*uk[2] - kz*uk[1])*phase_k*dealias,omg[0])
+        omg[1] = irfft_mpi(1j*(kz*uk[0] - kx*uk[2])*phase_k*dealias,omg[1])
+        omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0])*phase_k*dealias,omg[2])
+        
+        rhsu[:] = (omg[2]*u[1] - omg[1]*u[2])
+        rhsv[:] = (omg[0]*u[2] - omg[2]*u[0])
+        rhsw[:] = (omg[1]*u[0] - omg[0]*u[1])
+
+        
+        
+        rhsuk += (rfft_mpi(rhsu, pk) )*conjphase_k*dealias*0.5 + fk[0]*dealias
+        rhsvk += (rfft_mpi(rhsv, pk) )*conjphase_k*dealias*0.5 + fk[1]*dealias
+        rhswk += (rfft_mpi(rhsw, pk) )*conjphase_k*dealias*0.5 + fk[2]*dealias
+        
+        
+        ## The pressure term
+        pk[:] = 1j*invlap  * (kx*rhsuk + ky*rhsvk + kz*rhswk)
+        
+        
+
+        ## The RHS term with the pressure   
+        uk_t[0] = rhsuk - 1j*kx*pk - nu*((-lap)**lp)*uk[0]*isexplicit * visc 
+        uk_t[1] = rhsvk - 1j*ky*pk - nu*((-lap)**lp)*uk[1]*isexplicit * visc 
+        uk_t[2] = rhswk - 1j*kz*pk - nu*((-lap)**lp)*uk[2]*isexplicit * visc 
+
+
+            
+        return uk_t 
+
+else:
+    def RHS(uk, uk_t,visc = 1,forc = 1):
+        ## The RHS terms of u, v and w excluding the forcing and the hypervisocsity term 
+        fk[:] = forcing(uk,fk)*forc
+        
+        u[0] = irfft_mpi(uk[0], u[0])
+        u[1] = irfft_mpi(uk[1], u[1])
+        u[2] = irfft_mpi(uk[2], u[2])
+        
+        omg[0] = irfft_mpi(1j*(ky*uk[2] - kz*uk[1]),omg[0])
+        omg[1] = irfft_mpi(1j*(kz*uk[0] - kx*uk[2]),omg[1])
+        omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0]),omg[2])
+        
+        rhsu[:] = (omg[2]*u[1] - omg[1]*u[2])
+        rhsv[:] = (omg[0]*u[2] - omg[2]*u[0])
+        rhsw[:] = (omg[1]*u[0] - omg[0]*u[1]) 
+        
+        
+        rhsuk[:]  = (rfft_mpi(rhsu, rhsuk) + fk[0])*dealias 
+        rhsvk[:]  = (rfft_mpi(rhsv, rhsvk) + fk[1])*dealias 
+        rhswk[:]  = (rfft_mpi(rhsw, rhswk) + fk[2])*dealias 
+        
+        ## The pressure term
+        pk[:] = 1j*invlap  * (kx*rhsuk + ky*rhsvk + kz*rhswk)
+        
+        
+
+        ## The RHS term with the pressure   
+        uk_t[0] = rhsuk - 1j*kx*pk - nu*((-lap)**lp)*uk[0]*isexplicit * visc
+        uk_t[1] = rhsvk - 1j*ky*pk - nu*((-lap)**lp)*uk[1]*isexplicit * visc
+        uk_t[2] = rhswk - 1j*kz*pk - nu*((-lap)**lp)*uk[2]*isexplicit * visc
+        
+
+            
+        return uk_t 
 
 
 
@@ -355,12 +428,15 @@ def save(i,uk):
     comm.Barrier()
     # np.savez_compressed(f"{new_dir}/Fields_{rank}.npz",uhat = uk)
     # np.savez_compressed(f"{new_dir}/Fields_{rank}",u = u[0],v = u[1],w = u[2])
-
-    u_temp = rfftn(u, axes = (-2,-1))[...,cond_ky, :N//3+1] #! Will only save the values in x k_x and k_y plane for the dealiased mode. 
-    
-    np.savez_compressed(f"{new_dir}/Fields_cmp_{rank}",u = u_temp[0],v = u_temp[1],w = u_temp[2])
-    np.savez_compressed(f"{new_dir}/Energy_spectrum",ek = ek_arr)
-    np.savez_compressed(f"{new_dir}/Flux_spectrum",Pik = Pik_arr)
+    if phase_shifted:
+        np.savez_compressed(f"{new_dir}/Fields_k_{rank}",uk = uk[0],vk = uk[1],wk = uk[2])
+        np.savez_compressed(f"{new_dir}/Energy_spectrum",ek = ek_arr)
+        np.savez_compressed(f"{new_dir}/Flux_spectrum",Pik = Pik_arr)
+    else:
+        u_temp = rfftn(u, axes = (-2,-1))[...,cond_ky, :N//3+1] #! Will only save the values in x k_x and k_y plane for the dealiased mode. 
+        np.savez_compressed(f"{new_dir}/Fields_cmp_{rank}",u = u_temp[0],v = u_temp[1],w = u_temp[2])
+        np.savez_compressed(f"{new_dir}/Energy_spectrum",ek = ek_arr)
+        np.savez_compressed(f"{new_dir}/Flux_spectrum",Pik = Pik_arr)
     
     comm.Barrier()
     
