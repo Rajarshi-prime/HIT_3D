@@ -21,7 +21,7 @@ if viscosity_integrator == "explicit": isexplicit = 1.
 else : isexplicit = 0.
 ## ---------------------------------------
 ## ------------- Time steps --------------
-N = 512
+N = 64
 dt = 0.256/N #! Such that increasing resolution will decrease the dt
 T = 20
 dt_save = 1.0
@@ -58,12 +58,12 @@ if rank ==0 : print(kx_diff.shape, ky_diff.shape, kz_diff.shape)
 ## -------------------------------------------------
 
 ## ----------- Parameters ----------
-lp = 8 # Hyperviscosity power
+lp = 1 # Hyperviscosity power
 # nu0 = 8.192 #! Viscosity for N = 1
 # nu0 = 4.714 #! Viscosity from Pope's 256 run 
 nu0 = 0.8 #! Viscosity for N = 1
 m = 2.0 #! Desired kmax*eta
-nu = nu0*(3*m/N)**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
+nu = nu0*(3*m/N)**(2*(lp - 1/3)) if not phase_shifted else nu0*(3/1.414)*(m/N)**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
 # nu = nu0/(N**(4/3))  
 
 einit = 1*(TWO_PI)**3 # Initial energy
@@ -364,36 +364,67 @@ def load_trunc(x):
     x1 = np.zeros((*x.shape[:-2],N,Nf),dtype = np.complex128)
     x1[...,cond_ky,:x.shape[-1]] = x.copy()
     return irfftn(x1,(N,N), axes = (-2,-1))
+if phase_shifted: 
+    def load_npz(paths,uk):
+        load_num_slabs = len([x for x in (paths).iterdir() if "Fields" in str(x) and ".npz" in str(x)])
+        data_per_rank = N//load_num_slabs
+        rank_data = range(rank*Np,(rank + 1)*Np) # The rank contains these slices 
+        slab_old = np.inf
+        for lidx,j in enumerate(rank_data):
+            slab = j//data_per_rank
+            idx = j%data_per_rank
+            
+            # print(f"Rank {rank} is loading slab {slab} and idx {idx}")
+            
+            """Loading the truncated data"""
+            if slab_old != slab:  
+                Field = np.load(paths/f"Fields_k_{slab}.npz")
+            slab_old = slab
+            uk[0,:,lidx] = Field['uk'][:,idx]
+            uk[1,:,lidx] = Field['vk'][:,idx]
+            uk[2,:,lidx] = Field['wk'][:,idx]
 
-def load_npz(paths,u):
-    load_num_slabs = len([x for x in (paths).iterdir() if "Fields" in str(x) and ".npz" in str(x)])
-    data_per_rank = N//load_num_slabs
-    rank_data = range(rank*Np,(rank + 1)*Np) # The rank contains these slices 
-    slab_old = np.inf
-    for lidx,j in enumerate(rank_data):
-        slab = j//data_per_rank
-        idx = j%data_per_rank
-        
-        # print(f"Rank {rank} is loading slab {slab} and idx {idx}")
-        
-        """Loading the truncated data"""
-        if slab_old != slab:  
-            Field = np.load(paths/f"Fields_cmp_{slab}.npz")
-        slab_old = slab
-        u[0,lidx] = load_trunc(Field['u'][idx])
-        u[1,lidx] = load_trunc(Field['v'][idx])
-        u[2,lidx] = load_trunc(Field['w'][idx])
+            
+            
+            """Loading the OG data"""
+            # if slab_old != slab:  Field = np.load(paths/f"Fields_{slab}.npz")
+            # slab_old = slab
+            # u[0,lidx] = Field['u'][idx]
+            # u[1,lidx] = Field['v'][idx]
+            # u[2,lidx] = Field['w'][idx]
+            
+        return uk
 
-        
-        
-        """Loading the OG data"""
-        # if slab_old != slab:  Field = np.load(paths/f"Fields_{slab}.npz")
-        # slab_old = slab
-        # u[0,lidx] = Field['u'][idx]
-        # u[1,lidx] = Field['v'][idx]
-        # u[2,lidx] = Field['w'][idx]
-        
-    return u
+else: 
+    def load_npz(paths,u):
+        load_num_slabs = len([x for x in (paths).iterdir() if "Fields" in str(x) and ".npz" in str(x)])
+        data_per_rank = N//load_num_slabs
+        rank_data = range(rank*Np,(rank + 1)*Np) # The rank contains these slices 
+        slab_old = np.inf
+        for lidx,j in enumerate(rank_data):
+            slab = j//data_per_rank
+            idx = j%data_per_rank
+            
+            # print(f"Rank {rank} is loading slab {slab} and idx {idx}")
+            
+            """Loading the truncated data"""
+            if slab_old != slab:  
+                Field = np.load(paths/f"Fields_cmp_{slab}.npz")
+            slab_old = slab
+            u[0,lidx] = load_trunc(Field['u'][idx])
+            u[1,lidx] = load_trunc(Field['v'][idx])
+            u[2,lidx] = load_trunc(Field['w'][idx])
+
+            
+            
+            """Loading the OG data"""
+            # if slab_old != slab:  Field = np.load(paths/f"Fields_{slab}.npz")
+            # slab_old = slab
+            # u[0,lidx] = Field['u'][idx]
+            # u[1,lidx] = Field['v'][idx]
+            # u[2,lidx] = Field['w'][idx]
+            
+        return u
     
 
 def load_hdf5(paths, u):
