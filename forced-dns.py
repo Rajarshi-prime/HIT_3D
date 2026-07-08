@@ -386,13 +386,25 @@ if phase_shifted:
 
             
             
-            """Loading the OG data"""
+            # """Loading the OG cmp data"""
+            # if slab_old != slab:  
+            #     Field = np.load(paths/f"Fields_cmp_{slab}.npz")
+            # slab_old = slab
+            # u[0,lidx] = load_trunc(Field['u'][idx])
+            # u[1,lidx] = load_trunc(Field['v'][idx])
+            # u[2,lidx] = load_trunc(Field['w'][idx])
+
+            # """Loading the OG data"""
             # if slab_old != slab:  Field = np.load(paths/f"Fields_{slab}.npz")
             # slab_old = slab
             # u[0,lidx] = Field['u'][idx]
             # u[1,lidx] = Field['v'][idx]
             # u[2,lidx] = Field['w'][idx]
-            
+
+        # """Loading the OG cmp or OG data"""
+        # uk[0] = rfft_mpi(u[0], uk[0])*dealias
+        # uk[1] = rfft_mpi(u[1], uk[1])*dealias
+        # uk[2] = rfft_mpi(u[2], uk[2])*dealias
         return uk
 
 else: 
@@ -655,21 +667,27 @@ if not forcestart:
     paths = sorted([x for x in (savePath).iterdir() if "time_" in str(x)], key=os.path.getmtime)
     """The folder is paths[-1]"""
     paths = paths[-2]
-
+    
     if rank ==0 : print(f"Loading data from {paths}")
     tinit = float(str(paths).split("time_")[-1])
     # tinit = 0.0
-    
-    u = load_npz(paths,u) 
+    if phase_shifted:
+        uk = load_npz(paths,uk)
+        u[0] = irfft_mpi(uk[0], u[0])
+        u[1] = irfft_mpi(uk[1], u[1])
+        u[2] = irfft_mpi(uk[2], u[2])
     # u = load_hdf5(paths,u) 
+    else:
+        u = load_npz(paths,u)
+        uk[0] = rfft_mpi(u[0], uk[0])*dealias
+        uk[1] = rfft_mpi(u[1], uk[1])*dealias
+        uk[2] = rfft_mpi(u[2], uk[2])*dealias
         
     del paths
     comm.Barrier()
     if rank ==0: print("Data loaded successfully")
     
-    uk[0] = rfft_mpi(u[0], uk[0])*dealias
-    uk[1] = rfft_mpi(u[1], uk[1])*dealias
-    uk[2] = rfft_mpi(u[2], uk[2])*dealias
+
     
 
 if forcestart:
